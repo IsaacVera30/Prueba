@@ -1,29 +1,19 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Estimación por ML</title>
-  <style>
-    body { font-family: Arial; text-align: center; background: #f9f9f9; }
-    .box { margin-top: 40px; padding: 20px; display: inline-block; background: white; border: 2px solid #ccc; border-radius: 10px; }
-    button { margin: 10px; padding: 10px 20px; font-size: 16px; }
-  </style>
+    <meta charset="UTF-8">
+    <title>Estimación por ML</title>
 </head>
 <body>
-  <div class="box">
-    <h2>🧠 Estimación por ML</h2>
-    <p><strong>Sistólica:</strong> {{ sys if sys else "---" }} mmHg</p>
-    <p><strong>Diastólica:</strong> {{ dia if dia else "---" }} mmHg</p>
-
-    {% if autorizado %}
-      <form action="/api/detener" method="post">
-        <button type="submit" style="background: red; color: white;">⛔ Detener Registro</button>
-      </form>
-    {% else %}
-      <form action="/api/presion" method="post">
-        <button type="submit" style="background: green; color: white;">✅ Autorizar Registro</button>
-      </form>
-    {% endif %}
-  </div>
+    <div style="font-family: sans-serif; text-align: center; padding: 30px;">
+        <h2>🧠 Estimación por ML</h2>
+        <p><strong>Sistólica:</strong> {{ estimacion.sys }} mmHg</p>
+        <p><strong>Diastólica:</strong> {{ estimacion.dia }} mmHg</p>
+        {% if autorizado %}
+            <a href="/api/detener"><button style="background:red;color:white;padding:10px 20px;">🛑 Detener Registro</button></a>
+        {% else %}
+            <a href="/api/autorizar"><button style="background:green;color:white;padding:10px 20px;">✅ Autorizar Registro</button></a>
+        {% endif %}
+    </div>
 </body>
 </html>
