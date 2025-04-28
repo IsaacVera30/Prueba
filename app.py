@@ -11,7 +11,6 @@ modelo_dia = joblib.load("modelo_dia.pkl")
 autorizado = False
 ultima_estimacion = {"sys": "---", "dia": "---"}
 
-# Ventanas móviles para IR y RED
 ventana_ir = []
 ventana_red = []
 MUESTRAS = 10
