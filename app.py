@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 import pandas as pd
 import joblib
+import numpy as np
 
 app = Flask(__name__)
 
@@ -8,8 +9,12 @@ modelo_sys = joblib.load("modelo_sys.pkl")
 modelo_dia = joblib.load("modelo_dia.pkl")
 
 autorizado = False
-registrando = False
 ultima_estimacion = {"sys": "---", "dia": "---"}
+
+# Ventanas móviles para IR y RED
+ventana_ir = []
+ventana_red = []
+MUESTRAS = 10
 
 @app.route("/")
 def index():
@@ -17,12 +22,31 @@ def index():
 
 @app.route("/api/presion", methods=["POST"])
 def registrar_datos():
-    global autorizado, ultima_estimacion, registrando
+    global ultima_estimacion, autorizado
+
     data = request.get_json()
     hr = int(data.get("hr", 0))
-    spo2 = int(data.get("spo2", 0))
     ir = int(data.get("ir", 0))
     red = int(data.get("red", 0))
+
+    ventana_ir.append(ir)
+    ventana_red.append(red)
+
+    if len(ventana_ir) > MUESTRAS:
+        ventana_ir.pop(0)
+    if len(ventana_red) > MUESTRAS:
+        ventana_red.pop(0)
+
+    spo2 = 0
+    if len(ventana_ir) == MUESTRAS and len(ventana_red) == MUESTRAS:
+        dc_ir = np.mean(ventana_ir)
+        dc_red = np.mean(ventana_red)
+        ac_ir = np.mean(np.abs(np.array(ventana_ir) - dc_ir))
+        ac_red = np.mean(np.abs(np.array(ventana_red) - dc_red))
+
+        if ac_ir > 0 and ac_red > 0:
+            ratio = (ac_red / dc_red) / (ac_ir / dc_ir)
+            spo2 = max(70, min(100, 110 - 25 * ratio))
 
     entrada = pd.DataFrame([[hr, spo2]], columns=["hr", "spo2"])
     sys = modelo_sys.predict(entrada)[0]
