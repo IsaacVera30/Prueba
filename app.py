@@ -46,6 +46,8 @@ def registrar_datos():
         if ac_ir > 0 and ac_red > 0:
             ratio = (ac_red / dc_red) / (ac_ir / dc_ir)
             spo2 = max(70, min(100, 110 - 25 * ratio))
+        else:
+            spo2 = 98  # Default seguro
 
     entrada = pd.DataFrame([[hr, spo2]], columns=["hr", "spo2"])
     sys = modelo_sys.predict(entrada)[0]
@@ -57,7 +59,7 @@ def registrar_datos():
         with open("registro_sensor_entrenamiento.csv", "a") as f:
             f.write(f"{hr},{spo2},{ir},{red},{sys:.2f},{dia:.2f}\n")
 
-    return jsonify({"sys": round(sys, 2), "dia": round(dia, 2)})
+    return jsonify({"sys": round(sys, 2), "dia": round(dia, 2), "spo2": round(spo2, 1)})
 
 @app.route("/api/autorizacion", methods=["GET"])
 def estado_autorizacion():
