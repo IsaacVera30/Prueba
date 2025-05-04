@@ -4,6 +4,7 @@ import joblib
 import numpy as np
 import mysql.connector
 from datetime import datetime
+import os
 
 app = Flask(__name__)
 
@@ -16,6 +17,15 @@ ultima_estimacion = {"sys": "---", "dia": "---", "nivel": "---"}
 ventana_ir = []
 ventana_red = []
 MUESTRAS = 10
+
+# 🔐 Credenciales Railway usando variables de entorno
+DB_CONFIG = {
+    "host": os.environ.get("MYSQLHOST"),
+    "user": os.environ.get("MYSQLUSER"),
+    "password": os.environ.get("MYSQLPASSWORD"),
+    "database": os.environ.get("MYSQLDATABASE"),
+    "port": int(os.environ.get("MYSQLPORT", 3306))
+}
 
 def clasificar_nivel(sys, dia):
     if sys >= 180 or dia >= 110:
@@ -31,21 +41,15 @@ def clasificar_nivel(sys, dia):
 
 def guardar_en_mysql(id_paciente, sys, dia, nivel):
     try:
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",  # Cambia si tienes contraseña
-            database="monitoreo_salud"
-        )
+        conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel, fecha) VALUES (%s, %s, %s, %s, %s)"
-        valores = (id_paciente, sys, dia, nivel, datetime.now())
-        cursor.execute(query, valores)
+        cursor.execute(query, (id_paciente, sys, dia, nivel, datetime.now()))
         conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
-        print("Error al guardar en MySQL:", e)
+        print("❌ Error MySQL:", e)
 
 @app.route("/")
 def index():
@@ -78,15 +82,18 @@ def registrar_datos():
     entrada = pd.DataFrame([[hr, spo2]], columns=["hr", "spo2"])
     sys = modelo_sys.predict(entrada)[0]
     dia = modelo_dia.predict(entrada)[0]
-
     nivel = clasificar_nivel(sys, dia)
-    ultima_estimacion = {"sys": f"{sys:.2f}", "dia": f"{dia:.2f}", "nivel": nivel}
+
+    ultima_estimacion = {
+        "sys": f"{sys:.2f}",
+        "dia": f"{dia:.2f}",
+        "nivel": nivel
+    }
 
     if autorizado:
         with open("registro_sensor_entrenamiento.csv", "a") as f:
             f.write(f"{hr},{spo2},{ir},{red},{sys:.2f},{dia:.2f}\n")
 
-    # Solo registrar si IR y RED están en rango de dedo colocado
     if ir > 20000 and red > 15000:
         guardar_en_mysql(id_paciente, round(sys, 2), round(dia, 2), nivel)
 
