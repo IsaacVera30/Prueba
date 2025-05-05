@@ -3,7 +3,6 @@ import pandas as pd
 import joblib
 import numpy as np
 import mysql.connector
-from datetime import datetime
 import os
 
 app = Flask(__name__)
@@ -18,7 +17,7 @@ ventana_ir = []
 ventana_red = []
 MUESTRAS = 10
 
-# 🔐 Credenciales Railway usando variables de entorno
+# Configuración MySQL desde Render
 DB_CONFIG = {
     "host": os.environ.get("MYSQLHOST"),
     "user": os.environ.get("MYSQLUSER"),
@@ -43,8 +42,8 @@ def guardar_en_mysql(id_paciente, sys, dia, nivel):
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
-        query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel, fecha) VALUES (%s, %s, %s, %s, %s)"
-        cursor.execute(query, (id_paciente, sys, dia, nivel, datetime.now()))
+        query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (id_paciente, sys, dia, nivel))
         conn.commit()
         cursor.close()
         conn.close()
@@ -119,19 +118,6 @@ def detener_registro():
     global autorizado
     autorizado = False
     return jsonify({"mensaje": "⛔ Registro detenido"})
-
-@app.route("/prueba_bd")
-def prueba_bd():
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        cursor.execute("SELECT NOW()")
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return f"✅ Conexión exitosa. Hora actual en BD: {result[0]}"
-    except Exception as e:
-        return f"❌ Error de conexión: {str(e)}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
