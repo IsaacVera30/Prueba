@@ -120,5 +120,18 @@ def detener_registro():
     autorizado = False
     return jsonify({"mensaje": "⛔ Registro detenido"})
 
+@app.route("/prueba_bd")
+def prueba_bd():
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("SELECT NOW()")
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return f"✅ Conexión exitosa. Hora actual en BD: {result[0]}"
+    except Exception as e:
+        return f"❌ Error de conexión: {str(e)}"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
