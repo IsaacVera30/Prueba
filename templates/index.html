@@ -1,19 +1,66 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Estimación por ML</title>
+  <meta charset="UTF-8">
+  <title>Monitor de Presión Arterial</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f7f7f7;
+    }
+    .contenedor {
+      background-color: #fff;
+      padding: 20px;
+      margin: 30px auto;
+      border-radius: 10px;
+      box-shadow: 0px 0px 10px #ccc;
+      max-width: 400px;
+    }
+    .nivel-normal { color: green; }
+    .nivel-h1 { color: #b59f00; }
+    .nivel-h2 { color: orange; }
+    .nivel-h3 { color: red; }
+    .nivel-hx { color: darkred; font-weight: bold; }
+    button {
+      padding: 10px 20px;
+      margin: 10px;
+      background-color: #008cba;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #005f7a;
+    }
+  </style>
 </head>
 <body>
-    <div style="font-family: sans-serif; text-align: center; padding: 30px;">
-        <h2>🧠 Estimación por ML</h2>
-        <p><strong>Sistólica:</strong> {{ estimacion.sys }} mmHg</p>
-        <p><strong>Diastólica:</strong> {{ estimacion.dia }} mmHg</p>
-        {% if autorizado %}
-            <a href="/api/detener"><button style="background:red;color:white;padding:10px 20px;">🛑 Detener Registro</button></a>
-        {% else %}
-            <a href="/api/autorizar"><button style="background:green;color:white;padding:10px 20px;">✅ Autorizar Registro</button></a>
-        {% endif %}
+  <div class="contenedor">
+    <h2>📈 Sistema de Monitoreo</h2>
+
+    <p><strong>SYS:</strong> {{ estimacion.sys }} mmHg</p>
+    <p><strong>DIA:</strong> {{ estimacion.dia }} mmHg</p>
+    <p><strong>SpO₂:</strong> {{ estimacion.nivel }}</p>
+
+    <p><strong>Nivel:</strong>
+      <span class="{% if estimacion.nivel == 'Normal' %}nivel-normal
+                    {% elif estimacion.nivel == 'H1' %}nivel-h1
+                    {% elif estimacion.nivel == 'H2' %}nivel-h2
+                    {% elif estimacion.nivel == 'H3' %}nivel-h3
+                    {% elif 'ACV' in estimacion.nivel %}nivel-hx
+                    {% endif %}">
+        {{ estimacion.nivel }}
+      </span>
+    </p>
+
+    <p><strong>Registro autorizado:</strong> {{ autorizado }}</p>
+
+    <div>
+      <a href="/api/autorizar"><button>✅ Autorizar Registro</button></a>
+      <a href="/api/detener"><button>⛔ Detener Registro</button></a>
     </div>
+  </div>
 </body>
 </html>
