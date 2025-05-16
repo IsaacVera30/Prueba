@@ -3,7 +3,13 @@ import pandas as pd
 import joblib
 import numpy as np
 import mysql.connector
+from datetime import datetime
 import os
+
+# Google Drive API
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 app = Flask(__name__)
 
@@ -17,7 +23,7 @@ ventana_ir = []
 ventana_red = []
 MUESTRAS = 10
 
-# Configuración MySQL desde Render
+# Variables de entorno para MySQL
 DB_CONFIG = {
     "host": os.environ.get("MYSQLHOST"),
     "user": os.environ.get("MYSQLUSER"),
@@ -25,6 +31,11 @@ DB_CONFIG = {
     "database": os.environ.get("MYSQLDATABASE"),
     "port": int(os.environ.get("MYSQLPORT", 3306))
 }
+
+# Ruta segura del archivo de credenciales de Google
+CREDENTIALS_PATH = "/etc/secrets/credentials.json"
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+FOLDER_ID = "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-"  # ← Cámbialo por tu ID real de carpeta en Google Drive
 
 def clasificar_nivel(sys, dia):
     if sys >= 180 or dia >= 110:
@@ -49,6 +60,29 @@ def guardar_en_mysql(id_paciente, sys, dia, nivel):
         conn.close()
     except Exception as e:
         print("❌ Error MySQL:", e)
+
+def subir_a_drive():
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            CREDENTIALS_PATH, scopes=SCOPES)
+        service = build("drive", "v3", credentials=credentials)
+
+        file_metadata = {
+            "name": "registro_sensor_entrenamiento.csv",
+            "parents": [FOLDER_ID]
+        }
+
+        media = MediaFileUpload("registro_sensor_entrenamiento.csv", mimetype="text/csv", resumable=True)
+        archivos = service.files().list(q=f"name='registro_sensor_entrenamiento.csv' and '{FOLDER_ID}' in parents and trashed=false", fields="files(id)").execute()
+        if archivos["files"]:
+            file_id = archivos["files"][0]["id"]
+            service.files().update(fileId=file_id, media_body=media).execute()
+            print("📤 Archivo actualizado en Google Drive")
+        else:
+            service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+            print("📤 Archivo subido a Google Drive")
+    except Exception as e:
+        print("❌ Error al subir a Drive:", e)
 
 @app.route("/")
 def index():
@@ -92,6 +126,7 @@ def registrar_datos():
     if autorizado:
         with open("registro_sensor_entrenamiento.csv", "a") as f:
             f.write(f"{hr},{spo2},{ir},{red},{sys:.2f},{dia:.2f}\n")
+        subir_a_drive()
 
     if ir > 20000 and red > 15000:
         guardar_en_mysql(id_paciente, round(sys, 2), round(dia, 2), nivel)
