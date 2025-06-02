@@ -54,7 +54,8 @@ DB_CONFIG = {
     'database': DB_NAME,
     'port': int(DB_PORT) if DB_PORT else 3306
 }
-print(f"Configuración DB: Host={DB_CONFIG['host']}, User={DB_CONFIG['user']}, DB={DB_CONFIG['database']}")
+print(f"Configuración DB: Host={DB_CONFIG['host']}, User={DB_CONFIG['user']}, DB={DB_CONFIG['database']}, Port={DB_CONFIG['port']}")
+
 
 # --- Configuración de Google Drive API ---
 KEY_FILE_LOCATION = 'service_account.json'
@@ -115,31 +116,26 @@ def calcular_spo2_simple(ir_val, red_val):
         print(f"Error inesperado en cálculo de SpO2: {e}")
         return -1
 
-def clasificar_nivel_presion(pas, pad):
+def clasificar_nivel_presion(pas_valor, pad_valor): # Renombrado argumentos para claridad interna
     """Clasifica la presión arterial según los nuevos niveles."""
-    # PAS: Presión Arterial Sistólica (en tu código ESP32 es lastPas, en JSON es "sys")
-    # PAD: Presión Arterial Diastólica (en tu código ESP32 es lastPad, en JSON es "dia")
-    
-    if pas == -1 or pad == -1: 
+    if pas_valor == -1 or pad_valor == -1: 
         return "---"
         
-    # Criterios actualizados
-    if pas > 180 or pad > 120:
-        return "HT Crisis"  # Crisis Hipertensiva
-    elif pas >= 140 or pad >= 90:
-        return "HT2"        # Hipertensión Grado 2
-    elif (pas >= 130 and pas <= 139) or (pad >= 80 and pad <= 89):
-        return "HT1"        # Hipertensión Grado 1
-    elif (pas >= 120 and pas <= 129) and pad < 80:
+    if pas_valor > 180 or pad_valor > 120:
+        return "HT Crisis"
+    elif pas_valor >= 140 or pad_valor >= 90:
+        return "HT2"        
+    elif (pas_valor >= 130 and pas_valor <= 139) or (pad_valor >= 80 and pad_valor <= 89):
+        return "HT1"        
+    elif (pas_valor >= 120 and pas_valor <= 129) and pad_valor < 80:
         return "Elevada"
-    elif pas < 120 and pad < 80:
+    elif pas_valor < 120 and pad_valor < 80:
         return "Normal"
     else:
-        # Lógica para casos límite o no cubiertos explícitamente por las condiciones "Y" anteriores
-        if pad >= 80: 
-             if pad >= 90: return "HT2" # Si PAS es <120 pero PAD es >=90
-             else: return "HT1" # Si PAS es <120 pero PAD es 80-89
-        return "Revisar" # Otros casos no claramente definidos
+        if pad_valor >= 80: 
+             if pad_valor >= 90: return "HT2"
+             else: return "HT1" 
+        return "Revisar" 
 
 def conectar_db():
     if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]):
@@ -153,31 +149,42 @@ def conectar_db():
         print(f"❌ Error al conectar a la base de datos MySQL: {err}")
         return None
 
-def guardar_medicion_mysql(id_paciente, pas, pad, spo2, hr, nivel):
-    conn = conectar_db()
+# --- FUNCIÓN MODIFICADA ---
+def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_spo2_estimada, valor_hr_recibido, valor_nivel_calculado):
+    """Guarda una medición en la base de datos MySQL usando columnas 'sys' y 'dia'."""
+    conn = conectar_db() 
     if conn is None:
+        print("guardar_medicion_mysql: No se pudo conectar a la DB.")
         return False
     
     cursor = conn.cursor()
     timestamp_actual = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Query SQL CORREGIDA para que coincida con las columnas 'sys' y 'dia' de tu tabla en Railway
     query = """
-    INSERT INTO mediciones (id_paciente, pas, pad, spo2, hr, nivel, timestamp) 
+    INSERT INTO mediciones (id_paciente, sys, dia, spo2, hr, nivel, timestamp) 
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
+    # valor_pas_estimada se guardará en la columna 'sys'
+    # valor_pad_estimada se guardará en la columna 'dia'
+    datos_a_insertar = (id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_spo2_estimada, valor_hr_recibido, valor_nivel_calculado, timestamp_actual)
+    
     try:
-        cursor.execute(query, (id_paciente, pas, pad, spo2, hr, nivel, timestamp_actual))
+        print(f"guardar_medicion_mysql: Intentando insertar: {datos_a_insertar}")
+        cursor.execute(query, datos_a_insertar)
         conn.commit()
-        print(f"Datos guardados en MySQL: IDP={id_paciente}, PAS={pas}, PAD={pad}, SpO2={spo2}, HR={hr}, Nivel={nivel}")
+        print(f"Datos guardados en MySQL: IDP={id_paciente_recibido}, SYS(PAS)={valor_pas_estimada}, DIA(PAD)={valor_pad_estimada}, SpO2={valor_spo2_estimada}, HR={valor_hr_recibido}, Nivel={valor_nivel_calculado}")
         return True
     except mysql.connector.Error as err:
         print(f"❌ Error al guardar en MySQL: {err}")
-        conn.rollback()
+        conn.rollback() # Importante hacer rollback en caso de error
         return False
     finally:
-        if conn.is_connected():
+        if conn.is_connected(): # Verificar si la conexión sigue abierta antes de cerrar
             cursor.close()
             conn.close()
-            print("Conexión a MySQL cerrada.")
+            print("Conexión a MySQL cerrada después de guardar/fallar.")
+# --- FIN FUNCIÓN MODIFICADA ---
 
 def get_google_drive_service():
     if not os.path.exists(KEY_FILE_LOCATION):
@@ -194,8 +201,8 @@ def get_google_drive_service():
         return None
 
 def subir_archivo_a_drive(file_path, file_name_on_drive):
-    if not FOLDER_ID:
-        print("Error: FOLDER_ID de Google Drive no configurado. No se puede subir archivo.")
+    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive': # Evitar error si es el placeholder
+        print("Error: FOLDER_ID de Google Drive no configurado o es placeholder. No se puede subir archivo.")
         return False
         
     service = get_google_drive_service()
@@ -258,8 +265,8 @@ def api_procesar_presion():
             return jsonify({"error": "'hr', 'ir', 'red' deben ser numéricos"}), 400
 
         spo2_estimada = calcular_spo2_simple(ir, red)
-        pas_estimada = -1.0 # sys
-        pad_estimada = -1.0 # dia
+        pas_estimada = -1.0 # Valor que se guardará en columna 'sys'
+        pad_estimada = -1.0 # Valor que se guardará en columna 'dia'
 
         if spo2_estimada != -1 and modelo_sys and modelo_dia:
             entrada_df = pd.DataFrame([[hr, spo2_estimada]], columns=['hr', 'spo2'])
@@ -286,12 +293,18 @@ def api_procesar_presion():
             except Exception as e_csv:
                 print(f"Error al guardar o subir CSV de entrenamiento: {e_csv}")
 
+        # Condición para guardar en MySQL
+        print(f"DEBUG: Antes de guardar en DB - ir={ir}, red={red}, pas_estimada={pas_estimada}") # DEBUG
         if ir > 10000 and red > 10000 and pas_estimada != -1: 
+            # Llamada a la función MODIFICADA, pasando los valores estimados de PAS y PAD
             guardar_medicion_mysql(id_paciente_in, pas_estimada, pad_estimada, spo2_estimada, hr, nivel_presion)
+        else:
+            print("DEBUG: Condición para guardar en DB no cumplida.")
+
 
         return jsonify({
-            "sys": pas_estimada, 
-            "dia": pad_estimada, 
+            "sys": pas_estimada, # El ESP32 espera 'sys'
+            "dia": pad_estimada, # El ESP32 espera 'dia'
             "spo2": spo2_estimada,
             "nivel": nivel_presion
         }), 200
@@ -333,7 +346,7 @@ if __name__ == "__main__":
     if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]):
         print("ADVERTENCIA: Faltan variables de entorno para la base de datos. La conexión a DB podría fallar.")
     if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive':
-        print("ADVERTENCIA: FOLDER_ID de Google Drive no configurado. La subida a Drive no funcionará.")
+        print("ADVERTENCIA: FOLDER_ID de Google Drive no configurado o es placeholder. La subida a Drive no funcionará.")
     if not os.path.exists(KEY_FILE_LOCATION):
          print(f"ADVERTENCIA: Archivo de credenciales '{KEY_FILE_LOCATION}' no encontrado. La subida a Drive no funcionará.")
 
