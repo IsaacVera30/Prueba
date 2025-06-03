@@ -1,13 +1,14 @@
 from flask import Flask, request, jsonify, render_template
 import pandas as pd
 import joblib # Para cargar modelos .pkl de scikit-learn
+import numpy as np # Importado para cálculos de SpO2 como en el código origen
 import os
 import csv
 from datetime import datetime
 import mysql.connector # Asegúrate de tener PyMySQL o mysql-connector-python instalado
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload # Usado en la versión actual del Canvas
 
 app = Flask(__name__)
 
@@ -40,12 +41,17 @@ ultima_estimacion = {
     "hr": "---", "nivel": "---", "timestamp": "---"
 }
 
+# Ventana de datos para SpO2 (como en el código origen)
+ventana_ir = []
+ventana_red = []
+MUESTRAS = 10 # Coincide con MUESTRAS en el código origen para SpO2
+
 # --- Configuración de la Base de Datos MySQL (desde variables de entorno) ---
-DB_HOST = os.environ.get('DB_HOST')
-DB_USER = os.environ.get('DB_USER')
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-DB_NAME = os.environ.get('DB_NAME')
-DB_PORT = os.environ.get('DB_PORT', 3306) 
+DB_HOST = os.environ.get('DB_HOST') # En tu origen era MYSQLHOST
+DB_USER = os.environ.get('DB_USER') # En tu origen era MYSQLUSER
+DB_PASSWORD = os.environ.get('DB_PASSWORD') # En tu origen era MYSQLPASSWORD
+DB_NAME = os.environ.get('DB_NAME') # En tu origen era MYSQLDATABASE
+DB_PORT = os.environ.get('DB_PORT', 3306) # En tu origen era MYSQLPORT
 
 DB_CONFIG = {
     'host': DB_HOST,
@@ -58,69 +64,82 @@ print(f"Configuración DB: Host={DB_CONFIG['host']}, User={DB_CONFIG['user']}, D
 
 
 # --- Configuración de Google Drive API ---
-KEY_FILE_LOCATION = 'service_account.json'
+# Usando la estructura del Canvas que es más flexible para el path de credenciales
+KEY_FILE_LOCATION = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'service_account.json') # Render puede usar GOOGLE_APPLICATION_CREDENTIALS
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
-FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID') 
+FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") # Usando el ID de tu código origen como default
 CSV_FILENAME = "registro_sensor_entrenamiento.csv"
 
-if not FOLDER_ID:
-    print("⚠️ Advertencia: GOOGLE_DRIVE_FOLDER_ID no está configurado. La subida a Drive no funcionará.")
+if not FOLDER_ID or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-": # Si es el valor por defecto o no está
+    print("⚠️ Advertencia: GOOGLE_DRIVE_FOLDER_ID no está configurado correctamente o usa el valor de ejemplo. La subida a Drive podría no funcionar como se espera.")
+if not os.path.exists(KEY_FILE_LOCATION):
+    print(f"⚠️ Advertencia: Archivo de credenciales '{KEY_FILE_LOCATION}' no encontrado. La subida a Drive no funcionará.")
 
-# --- Ventana de datos para SpO2 (cálculo simplificado) ---
-ventana_ir_spo2 = []
-ventana_red_spo2 = []
-MUESTRAS_SPO2_CALC = 10 
 
-def calcular_spo2_simple(ir_val, red_val):
-    global ventana_ir_spo2, ventana_red_spo2
+# --- Cálculo de SpO2 (adaptado del código origen) ---
+def calcular_spo2_desde_origen(current_ir, current_red):
+    global ventana_ir, ventana_red # Usando las ventanas globales como en tu código origen
+    
+    # Asegurar que los valores sean numéricos
     try:
-        ir_val = float(ir_val)
-        red_val = float(red_val)
+        ir_val = float(current_ir)
+        red_val = float(current_red)
     except ValueError:
-        print("Error: ir_val o red_val no son numéricos para SpO2.")
-        return -1
+        print("Error: ir_val o red_val no son numéricos para SpO2 (origen).")
+        return 0 # Como en tu código origen
 
-    ventana_ir_spo2.append(ir_val)
-    ventana_red_spo2.append(red_val)
+    ventana_ir.append(ir_val)
+    ventana_red.append(red_val)
 
-    if len(ventana_ir_spo2) > MUESTRAS_SPO2_CALC:
-        ventana_ir_spo2.pop(0)
-        ventana_red_spo2.pop(0)
+    if len(ventana_ir) > MUESTRAS:
+        ventana_ir.pop(0)
+    if len(ventana_red) > MUESTRAS:
+        ventana_red.pop(0)
 
-    if len(ventana_ir_spo2) < MUESTRAS_SPO2_CALC:
-        return -1 
+    spo2 = 0 # Valor por defecto como en tu código origen
+    if len(ventana_ir) == MUESTRAS: # Solo calcular si tenemos suficientes muestras
+        # Evitar procesar si los valores son demasiado bajos (sin dedo)
+        # Este umbral es del código del Canvas, tu código origen no lo tenía aquí explícitamente
+        # pero es una buena práctica. Lo mantendré.
+        if ir_val < 10000 or red_val < 10000: 
+            print("DEBUG: Valores IR/RED bajos en SpO2 (origen), posible no dedo.")
+            return 0 # O -1 para indicar error/no cálculo
 
-    if ir_val < 10000 or red_val < 10000: 
-        return -1
+        try:
+            np_ventana_ir = np.array(ventana_ir)
+            np_ventana_red = np.array(ventana_red)
 
-    try:
-        dc_ir = sum(ventana_ir_spo2) / len(ventana_ir_spo2)
-        ac_ir = max(ventana_ir_spo2) - min(ventana_ir_spo2)
-        dc_red = sum(ventana_red_spo2) / len(ventana_red_spo2)
-        ac_red = max(ventana_red_spo2) - min(ventana_red_spo2)
+            dc_ir = np.mean(np_ventana_ir)
+            dc_red = np.mean(np_ventana_red)
+            
+            # Cálculo de AC como en tu código origen
+            ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir))
+            ac_red = np.mean(np.abs(np_ventana_red - dc_red))
 
-        if dc_ir <= 0 or dc_red <= 0 or ac_ir <= 0 or ac_red <= 0: 
-            return -1
+            if dc_ir <= 0 or dc_red <= 0 or ac_ir <= 0 or ac_red <= 0:
+                print("DEBUG: DC o AC es cero o negativo en SpO2 (origen).")
+                return 0 # O -1
 
-        R = (ac_red / dc_red) / (ac_ir / dc_ir)
-        spo2 = 110 - 25 * R 
-        
-        if spo2 > 100: spo2 = 100.0
-        elif spo2 < 70: spo2 = 70.0 
-        
-        return round(spo2, 1)
-    except ZeroDivisionError:
-        print("Error: División por cero en cálculo de SpO2.")
-        return -1
-    except Exception as e:
-        print(f"Error inesperado en cálculo de SpO2: {e}")
-        return -1
+            ratio = (ac_red / dc_red) / (ac_ir / dc_ir)
+            spo2_calc = 110 - 25 * ratio 
+            spo2 = max(70.0, min(100.0, spo2_calc)) # Asegurar rango 70-100
+            
+        except ZeroDivisionError:
+            print("Error: División por cero en cálculo de SpO2 (origen).")
+            return 0 # O -1
+        except Exception as e:
+            print(f"Error inesperado en cálculo de SpO2 (origen): {e}")
+            return 0 # O -1
+            
+    return round(spo2, 1)
 
-def clasificar_nivel_presion(pas_valor, pad_valor): # Renombrado argumentos para claridad interna
+
+def clasificar_nivel_presion(pas_valor, pad_valor):
     """Clasifica la presión arterial según los nuevos niveles."""
-    if pas_valor == -1 or pad_valor == -1: 
+    if pas_valor == -1 or pad_valor == -1 or pd.isna(pas_valor) or pd.isna(pad_valor): 
         return "---"
         
+    # Criterios actualizados
     if pas_valor > 180 or pad_valor > 120:
         return "HT Crisis"
     elif pas_valor >= 140 or pad_valor >= 90:
@@ -138,6 +157,7 @@ def clasificar_nivel_presion(pas_valor, pad_valor): # Renombrado argumentos para
         return "Revisar" 
 
 def conectar_db():
+    # ... (Se mantiene la lógica de conexión del Canvas) ...
     if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]):
         print("Error: Configuración de base de datos incompleta. No se puede conectar.")
         return None
@@ -149,9 +169,9 @@ def conectar_db():
         print(f"❌ Error al conectar a la base de datos MySQL: {err}")
         return None
 
-# --- FUNCIÓN MODIFICADA ---
 def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_spo2_estimada, valor_hr_recibido, valor_nivel_calculado):
-    """Guarda una medición en la base de datos MySQL usando columnas 'sys' y 'dia'."""
+    # ... (Se mantiene la lógica de guardado del Canvas, que incluye spo2, hr, timestamp) ...
+    # ... (La query ya usa 'sys' y 'dia' como en la corrección anterior) ...
     conn = conectar_db() 
     if conn is None:
         print("guardar_medicion_mysql: No se pudo conectar a la DB.")
@@ -160,13 +180,10 @@ def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_e
     cursor = conn.cursor()
     timestamp_actual = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # Query SQL CORREGIDA para que coincida con las columnas 'sys' y 'dia' de tu tabla en Railway
     query = """
     INSERT INTO mediciones (id_paciente, sys, dia, spo2, hr, nivel, timestamp) 
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
-    # valor_pas_estimada se guardará en la columna 'sys'
-    # valor_pad_estimada se guardará en la columna 'dia'
     datos_a_insertar = (id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_spo2_estimada, valor_hr_recibido, valor_nivel_calculado, timestamp_actual)
     
     try:
@@ -177,16 +194,16 @@ def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_e
         return True
     except mysql.connector.Error as err:
         print(f"❌ Error al guardar en MySQL: {err}")
-        conn.rollback() # Importante hacer rollback en caso de error
+        conn.rollback() 
         return False
     finally:
-        if conn.is_connected(): # Verificar si la conexión sigue abierta antes de cerrar
+        if conn.is_connected(): 
             cursor.close()
             conn.close()
             print("Conexión a MySQL cerrada después de guardar/fallar.")
-# --- FIN FUNCIÓN MODIFICADA ---
 
 def get_google_drive_service():
+    # ... (Se mantiene la lógica de Google Drive del Canvas) ...
     if not os.path.exists(KEY_FILE_LOCATION):
         print(f"⚠️ Advertencia: Archivo de credenciales '{KEY_FILE_LOCATION}' no encontrado. La subida a Drive no funcionará.")
         return None
@@ -201,7 +218,8 @@ def get_google_drive_service():
         return None
 
 def subir_archivo_a_drive(file_path, file_name_on_drive):
-    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive': # Evitar error si es el placeholder
+    # ... (Se mantiene la lógica de Google Drive del Canvas, que actualiza si existe) ...
+    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive': 
         print("Error: FOLDER_ID de Google Drive no configurado o es placeholder. No se puede subir archivo.")
         return False
         
@@ -238,7 +256,7 @@ def home():
 
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
-    global autorizado, ultima_estimacion, modelo_sys, modelo_dia
+    global autorizado, ultima_estimacion, modelo_sys, modelo_dia, ventana_ir, ventana_red # Añadir ventanas globales
     
     if not modelo_sys or not modelo_dia:
         print("Error crítico: Modelos de ML no están cargados.")
@@ -249,7 +267,8 @@ def api_procesar_presion():
         if not data:
             return jsonify({"error": "Request debe ser JSON"}), 400
 
-        hr_in = data.get("hr")
+        # Obtener datos como en tu código origen (int)
+        hr_in = data.get("hr") 
         ir_in = data.get("ir")
         red_in = data.get("red")
         id_paciente_in = data.get("id_paciente", 1) 
@@ -258,54 +277,58 @@ def api_procesar_presion():
             return jsonify({"error": "Datos incompletos: 'hr', 'ir', 'red' son requeridos"}), 400
         
         try:
-            hr = float(hr_in)
-            ir = float(ir_in)
-            red = float(red_in)
+            # En tu código origen, hr, ir, red se usan como int para algunas cosas
+            # pero para los cálculos de spo2 y predicción se necesitarán floats
+            hr = float(hr_in) 
+            ir_float = float(ir_in) # Usar para spo2
+            red_float = float(red_in) # Usar para spo2
         except ValueError:
             return jsonify({"error": "'hr', 'ir', 'red' deben ser numéricos"}), 400
 
-        spo2_estimada = calcular_spo2_simple(ir, red)
-        pas_estimada = -1.0 # Valor que se guardará en columna 'sys'
-        pad_estimada = -1.0 # Valor que se guardará en columna 'dia'
+        # Usar el cálculo de SpO2 adaptado de tu código origen
+        spo2_estimada = calcular_spo2_desde_origen(ir_float, red_float)
+        
+        pas_estimada = -1.0 
+        pad_estimada = -1.0 
 
-        if spo2_estimada != -1 and modelo_sys and modelo_dia:
+        if spo2_estimada != 0 and spo2_estimada != -1 and modelo_sys and modelo_dia: # spo2=0 es un valor válido en tu origen, pero no ideal para predicción
+            # Asegurar que las columnas coincidan con el entrenamiento
             entrada_df = pd.DataFrame([[hr, spo2_estimada]], columns=['hr', 'spo2'])
-            pas_estimada = round(modelo_sys.predict(entrada_df)[0], 1)
-            pad_estimada = round(modelo_dia.predict(entrada_df)[0], 1)
+            pas_estimada = round(modelo_sys.predict(entrada_df)[0], 2) # .2f como en tu origen
+            pad_estimada = round(modelo_dia.predict(entrada_df)[0], 2) # .2f como en tu origen
             
         nivel_presion = clasificar_nivel_presion(pas_estimada, pad_estimada)
         
-        ultima_estimacion["sys"] = str(pas_estimada) if pas_estimada != -1 else "---"
-        ultima_estimacion["dia"] = str(pad_estimada) if pad_estimada != -1 else "---"
-        ultima_estimacion["spo2"] = str(spo2_estimada) if spo2_estimada != -1 else "---"
-        ultima_estimacion["hr"] = str(hr)
+        ultima_estimacion["sys"] = f"{pas_estimada:.2f}" if pas_estimada != -1 else "---"
+        ultima_estimacion["dia"] = f"{pad_estimada:.2f}" if pad_estimada != -1 else "---"
+        ultima_estimacion["spo2"] = f"{spo2_estimada:.1f}" if spo2_estimada != 0 and spo2_estimada != -1 else "---"
+        ultima_estimacion["hr"] = str(int(hr)) # hr como int
         ultima_estimacion["nivel"] = nivel_presion
         ultima_estimacion["timestamp"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         if autorizado:
             try:
-                with open(CSV_FILENAME, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([hr, spo2_estimada, ir, red, pas_estimada, pad_estimada])
+                # Guardar en CSV como en tu código origen
+                with open(CSV_FILENAME, mode='a', newline='') as file_csv:
+                    # Formato: hr,spo2,ir,red,sys,dia
+                    file_csv.write(f"{int(hr)},{spo2_estimada:.1f},{int(ir_in)},{int(red_in)},{pas_estimada:.2f},{pad_estimada:.2f}\n")
                 print(f"Datos guardados en {CSV_FILENAME} para entrenamiento.")
                 if FOLDER_ID and FOLDER_ID != 'tu_id_de_carpeta_en_google_drive':
                      subir_archivo_a_drive(CSV_FILENAME, CSV_FILENAME)
             except Exception as e_csv:
                 print(f"Error al guardar o subir CSV de entrenamiento: {e_csv}")
 
-        # Condición para guardar en MySQL
-        print(f"DEBUG: Antes de guardar en DB - ir={ir}, red={red}, pas_estimada={pas_estimada}") # DEBUG
-        if ir > 10000 and red > 10000 and pas_estimada != -1: 
-            # Llamada a la función MODIFICADA, pasando los valores estimados de PAS y PAD
+        # Condición para guardar en MySQL (ir > 20000 and red > 15000 como en tu código origen)
+        print(f"DEBUG: Antes de guardar en DB - ir={ir_in}, red={red_in}, pas_estimada={pas_estimada}")
+        if int(ir_in) > 20000 and int(red_in) > 15000 and pas_estimada != -1: 
             guardar_medicion_mysql(id_paciente_in, pas_estimada, pad_estimada, spo2_estimada, hr, nivel_presion)
         else:
-            print("DEBUG: Condición para guardar en DB no cumplida.")
-
+            print("DEBUG: Condición para guardar en DB no cumplida (según umbrales origen).")
 
         return jsonify({
-            "sys": pas_estimada, # El ESP32 espera 'sys'
-            "dia": pad_estimada, # El ESP32 espera 'dia'
-            "spo2": spo2_estimada,
+            "sys": round(pas_estimada, 2) if pas_estimada != -1 else -1, 
+            "dia": round(pad_estimada, 2) if pad_estimada != -1 else -1, 
+            "spo2": round(spo2_estimada, 1) if spo2_estimada != 0 and spo2_estimada != -1 else 0, # Devolver 0 si no se calculó, como en origen
             "nivel": nivel_presion
         }), 200
 
@@ -313,6 +336,7 @@ def api_procesar_presion():
         print(f"❌ Error general en /api/presion: {e}")
         return jsonify({"error": "Error interno del servidor", "detalle": str(e)}), 500
 
+# Manteniendo la estructura de /api/autorizacion del Canvas (GET y POST)
 @app.route("/api/autorizacion", methods=["GET", "POST"])
 def api_control_autorizacion():
     global autorizado
@@ -343,12 +367,13 @@ def get_ultima_medicion():
 
 if __name__ == "__main__":
     print("Iniciando servidor Flask para desarrollo local...")
+    # ... (advertencias de configuración como en el Canvas) ...
     if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]):
         print("ADVERTENCIA: Faltan variables de entorno para la base de datos. La conexión a DB podría fallar.")
-    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive':
-        print("ADVERTENCIA: FOLDER_ID de Google Drive no configurado o es placeholder. La subida a Drive no funcionará.")
+    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive' or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
+        print("ADVERTENCIA: GOOGLE_DRIVE_FOLDER_ID no configurado o es placeholder/ejemplo. La subida a Drive no funcionará.")
     if not os.path.exists(KEY_FILE_LOCATION):
          print(f"ADVERTENCIA: Archivo de credenciales '{KEY_FILE_LOCATION}' no encontrado. La subida a Drive no funcionará.")
 
-    port = int(os.environ.get("PORT", 5001)) 
+    port = int(os.environ.get("PORT", 10000)) # Usando el puerto de tu código origen para local
     app.run(host='0.0.0.0', port=port, debug=True)
