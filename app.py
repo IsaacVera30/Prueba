@@ -38,8 +38,8 @@ except Exception as e:
 autorizado = False
 ultima_estimacion = {
     "sys": "---", "dia": "---", "spo2": "---", 
-    "hr": "---", "nivel": "---", "timestamp": "---", # Timestamp de la última estimación en vivo
-    "modo_autorizado": False # Para la UI
+    "hr": "---", "nivel": "---", "timestamp": "---",
+    "modo_autorizado": False 
 }
 
 ventana_ir = []
@@ -63,41 +63,16 @@ DB_CONFIG = {
 print(f"Configuración DB: Host={DB_CONFIG['host']}, User={DB_CONFIG['user']}, DB={DB_CONFIG['database']}, Port={DB_CONFIG['port']}")
 
 # --- Configuración de Google Drive API ---
-KEY_FILE_LOCATION = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'service_account.json') 
+# Esta es la variable que faltaba definir globalmente:
+KEY_FILE_LOCATION_FALLBACK = 'service_account.json' 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") 
 CSV_FILENAME = "registro_sensor_entrenamiento.csv"
 
 if not FOLDER_ID or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
     print("⚠️ Advertencia: GOOGLE_DRIVE_FOLDER_ID no está configurado correctamente o usa el valor de ejemplo.")
-# La verificación de KEY_FILE_LOCATION se hará dentro de get_google_drive_service
+# La verificación del archivo de credenciales se hará dentro de get_google_drive_service
 
-
-def calcular_spo2_desde_origen(current_ir, current_red):
-    global ventana_ir, ventana_red 
-    try:
-        ir_val = float(current_ir); red_val = float(current_red)
-    except ValueError: return 0 
-
-    ventana_ir.append(ir_val); ventana_red.append(red_val)
-    if len(ventana_ir) > MUESTRAS: ventana_ir.pop(0)
-    if len(ventana_red) > MUESTRAS: ventana_red.pop(0)
-
-    spo2 = 0.0 
-    if len(ventana_ir) == MUESTRAS:
-        if ir_val < 10000 or red_val < 10000: return 0.0
-        try:
-            np_ventana_ir = np.array(ventana_ir); np_ventana_red = np.array(ventana_red)
-            dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
-            ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir)) 
-            ac_red = np.mean(np.abs(np_ventana_red - dc_red))
-            if dc_ir > 0 and dc_red > 0 and ac_ir > 0 and ac_red > 0 : 
-                ratio = (ac_red / dc_red) / (ac_ir / dc_ir)
-                spo2_calc = 110 - 25 * ratio
-                spo2 = max(70.0, min(100.0, spo2_calc))
-            else: print(f"DEBUG: SpO2 (origen) - DC/AC inválido.")
-        except Exception as e_spo2: print(f"Error en cálculo SpO2 (origen): {e_spo2}"); spo2 = 0.0             
-    return round(spo2, 1)
 
 def clasificar_nivel_presion(pas_valor, pad_valor):
     if pas_valor is None or pad_valor is None or pd.isna(pas_valor) or pd.isna(pad_valor) or pas_valor == -1 or pad_valor == -1: 
@@ -125,24 +100,17 @@ def conectar_db():
         print(f"❌ Error al conectar a MySQL: {err}")
         return None
 
-# --- FUNCIÓN MODIFICADA PARA GUARDAR MENOS COLUMNAS ---
 def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_nivel_calculado):
-    """Guarda una medición en MySQL (id_paciente, sys, dia, nivel)."""
     conn = conectar_db() 
     if conn is None:
         print("guardar_medicion_mysql: No se pudo conectar a la DB.")
         return False
-    
     cursor = conn.cursor()
-    # Asumimos que tu tabla 'mediciones' tiene una columna 'timestamp' que se auto-actualiza
-    # o que no necesitas guardar el timestamp desde la app para esta tabla.
-    # Si necesitas que la app guarde el timestamp, deberás añadir la columna en la tabla y aquí.
     query = """
     INSERT INTO mediciones (id_paciente, sys, dia, nivel) 
     VALUES (%s, %s, %s, %s)
     """
     datos_a_insertar = (id_paciente_recibido, valor_pas_estimada, valor_pad_estimada, valor_nivel_calculado)
-    
     try:
         print(f"guardar_medicion_mysql (simplificado): Intentando insertar: {datos_a_insertar}")
         cursor.execute(query, datos_a_insertar)
@@ -158,13 +126,13 @@ def guardar_medicion_mysql(id_paciente_recibido, valor_pas_estimada, valor_pad_e
             cursor.close()
             conn.close()
             print("Conexión a MySQL cerrada (guardar simplificado).")
-# --- FIN FUNCIÓN MODIFICADA ---
 
 def get_google_drive_service():
+    global KEY_FILE_LOCATION_FALLBACK # Asegurar que acceda a la global si es necesario (aunque ya lo hace por scope)
     effective_key_file_location = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', KEY_FILE_LOCATION_FALLBACK)
     print(f"Intentando cargar credenciales de Google Drive desde: {effective_key_file_location}")
     if not os.path.exists(effective_key_file_location):
-        print(f"⚠️ Advertencia: Archivo de credenciales '{effective_key_file_location}' no encontrado.")
+        print(f"⚠️ Advertencia: Archivo de credenciales '{effective_key_file_location}' no encontrado. La subida a Drive no funcionará.")
         return None
     try:
         creds = service_account.Credentials.from_service_account_file(effective_key_file_location, scopes=SCOPES)
@@ -174,7 +142,6 @@ def get_google_drive_service():
     except Exception as e: print(f"❌ Error al autenticar con Google Drive: {e}"); return None
 
 def subir_archivo_a_drive(file_path, file_name_on_drive):
-    # ... (sin cambios respecto a la versión anterior) ...
     if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive_placeholder' or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
         print("Error: FOLDER_ID de Google Drive no configurado o es placeholder/ejemplo. No se puede subir archivo.")
         return False
@@ -199,7 +166,6 @@ def subir_archivo_a_drive(file_path, file_name_on_drive):
 @app.route("/")
 def home():
     global ultima_estimacion, autorizado
-    # Pasamos el estado de autorizado a la plantilla
     ultima_estimacion["modo_autorizado"] = autorizado 
     return render_template("index.html", autorizado=autorizado, estimacion=ultima_estimacion)
 
@@ -219,7 +185,26 @@ def api_procesar_presion():
             hr = int(hr_in); ir_val = int(ir_in); red_val = int(red_in) 
         except ValueError: return jsonify({"error": "'hr', 'ir', 'red' deben ser numéricos enteros"}), 400
 
-        spo2_estimada = calcular_spo2_desde_origen(ir_val, red_val)
+        ventana_ir.append(ir_val); ventana_red.append(red_val)
+        if len(ventana_ir) > MUESTRAS: ventana_ir.pop(0)
+        if len(ventana_red) > MUESTRAS: ventana_red.pop(0)
+
+        spo2_estimada = 0.0 
+        if len(ventana_ir) == MUESTRAS:
+            if ir_val < 10000 or red_val < 10000: spo2_estimada = 0.0 # Si no hay dedo, spo2 = 0
+            else:
+                try:
+                    np_ventana_ir = np.array(ventana_ir); np_ventana_red = np.array(ventana_red)
+                    dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
+                    ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir)) 
+                    ac_red = np.mean(np.abs(np_ventana_red - dc_red))
+                    if dc_ir > 0 and dc_red > 0 and ac_ir > 0 and ac_red > 0 : 
+                        ratio = (ac_red / dc_red) / (ac_ir / dc_ir)
+                        spo2_calc = 110 - 25 * ratio
+                        spo2_estimada = max(70.0, min(100.0, spo2_calc))
+                    else: print(f"DEBUG: SpO2 (origen) - DC/AC inválido.")
+                except Exception as e_spo2: print(f"Error en cálculo SpO2 (origen): {e_spo2}"); spo2_estimada = 0.0             
+        
         pas_estimada = -1.0; pad_estimada = -1.0 
         if spo2_estimada > 0 and modelo_sys and modelo_dia: 
             entrada_df = pd.DataFrame([[float(hr), float(spo2_estimada)]], columns=['hr', 'spo2'])
@@ -234,14 +219,14 @@ def api_procesar_presion():
             "dia": f"{pad_estimada:.2f}" if pad_estimada != -1 else "---",
             "spo2": f"{spo2_estimada:.1f}" if spo2_estimada > 0 else "---",
             "hr": str(hr), "nivel": nivel_presion,
-            "timestamp": current_timestamp, # Timestamp de esta estimación
+            "timestamp": current_timestamp, 
             "modo_autorizado": autorizado
         }
 
         if autorizado:
             try:
                 with open(CSV_FILENAME, mode='a', newline='') as file_csv:
-                    file_csv.write(f"{hr},{spo2_estimada:.1f},{ir_val},{red_val},{pas_estimada:.2f},{pad_estimada:.2f},{current_timestamp}\n") # Añadido timestamp al CSV
+                    file_csv.write(f"{hr},{spo2_estimada:.1f},{ir_val},{red_val},{pas_estimada:.2f},{pad_estimada:.2f},{current_timestamp}\n")
                 print(f"Datos guardados en {CSV_FILENAME} para entrenamiento.")
                 if FOLDER_ID and FOLDER_ID != 'tu_id_de_carpeta_en_google_drive_placeholder' and FOLDER_ID != "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
                      subir_archivo_a_drive(CSV_FILENAME, CSV_FILENAME)
@@ -249,7 +234,6 @@ def api_procesar_presion():
 
         print(f"DEBUG: Antes de guardar en DB - ir_val={ir_val}, red_val={red_val}, pas_estimada={pas_estimada}")
         if ir_val > 20000 and red_val > 15000 and pas_estimada != -1: 
-            # Llamada a la función MODIFICADA que guarda menos columnas
             guardar_medicion_mysql(id_paciente_in, pas_estimada, pad_estimada, nivel_presion)
         else: print("DEBUG: Condición para guardar en DB no cumplida.")
 
@@ -263,46 +247,34 @@ def api_procesar_presion():
         print(f"❌ Error general en /api/presion: {e}"); import traceback; traceback.print_exc()
         return jsonify({"error": "Error interno del servidor", "detalle": str(e)}), 500
 
-# --- NUEVO ENDPOINT PARA OBTENER ÚLTIMAS MEDICIONES DE LA DB ---
 @app.route("/api/ultimas_mediciones", methods=["GET"])
 def get_ultimas_mediciones_db():
     conn = conectar_db()
-    if conn is None:
-        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
-    
-    cursor = conn.cursor(dictionary=True) # Para obtener resultados como diccionarios
-    # Asumiendo que tu tabla tiene una columna 'id' autoincremental o un 'timestamp' gestionado por la DB
-    # Si no tienes un timestamp en la tabla 'mediciones', ordena por 'id DESC'
-    # Si tu tabla tiene una columna 'timestamp' que registra la base de datos:
-    # query = "SELECT id_paciente, sys, dia, nivel, timestamp FROM mediciones ORDER BY timestamp DESC LIMIT 20"
-    # Si no, y 'id' es la clave primaria autoincremental:
+    if conn is None: return jsonify({"error": "No se pudo conectar a la DB"}), 500
+    cursor = conn.cursor(dictionary=True) 
+    # Asumiendo que tu tabla 'mediciones' tiene 'id' autoincremental.
+    # Si tienes un campo 'timestamp' que la DB llena, ordena por ese.
     query = "SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20"
-    
     mediciones = []
     try:
-        print("get_ultimas_mediciones_db: Ejecutando query para últimas 20 mediciones.")
+        print("get_ultimas_mediciones_db: Ejecutando query.")
         cursor.execute(query)
         mediciones = cursor.fetchall()
-        # Convertir datetime a string si tienes un campo timestamp en la SELECT
+        # Si tuvieras un campo timestamp de la DB y necesitas formatearlo:
         # for med in mediciones:
         #     if 'timestamp' in med and isinstance(med['timestamp'], datetime):
         #         med['timestamp'] = med['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-        print(f"get_ultimas_mediciones_db: Se obtuvieron {len(mediciones)} mediciones.")
+        print(f"get_ultimas_mediciones_db: {len(mediciones)} mediciones obtenidas.")
     except mysql.connector.Error as err:
-        print(f"❌ Error al obtener últimas mediciones de MySQL: {err}")
-        return jsonify({"error": "Error al consultar la base de datos", "detalle": str(err)}), 500
+        print(f"❌ Error al obtener últimas mediciones: {err}")
+        return jsonify({"error": "Error al consultar DB", "detalle": str(err)}), 500
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
-            print("Conexión a MySQL cerrada (get_ultimas_mediciones_db).")
-            
+        if conn.is_connected(): cursor.close(); conn.close(); print("Conexión MySQL cerrada (ultimas_mediciones).")
     return jsonify(mediciones), 200
-# --- FIN NUEVO ENDPOINT ---
 
 @app.route("/api/autorizacion", methods=["GET", "POST"])
 def api_control_autorizacion():
-    global autorizado, ultima_estimacion # Asegurar que ultima_estimacion es accesible
+    global autorizado, ultima_estimacion 
     if request.method == "POST":
         try:
             data = request.get_json()
@@ -312,7 +284,7 @@ def api_control_autorizacion():
             if isinstance(nuevo_estado, bool):
                 autorizado = nuevo_estado
                 print(f"Estado de autorización cambiado a: {autorizado}")
-                ultima_estimacion["modo_autorizado"] = autorizado # Actualizar para la UI
+                ultima_estimacion["modo_autorizado"] = autorizado 
                 return jsonify({"mensaje": f"Autorización cambiada a {autorizado}", "autorizado": autorizado}), 200
             else: return jsonify({"error": "Valor de 'autorizado' debe ser booleano"}), 400
         except Exception as e:
@@ -324,12 +296,10 @@ def api_control_autorizacion():
 @app.route("/api/ultima_estimacion", methods=["GET"])
 def get_ultima_medicion():
     global ultima_estimacion
-    # Asegurar que el modo autorizado se incluya para la UI
     ultima_estimacion["modo_autorizado"] = autorizado 
     return jsonify(ultima_estimacion)
 
 if __name__ == "__main__":
-    # ... (sin cambios, con las advertencias de configuración) ...
     print("Iniciando servidor Flask para desarrollo local...")
     if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]):
         print("ADVERTENCIA: Faltan variables de entorno para la base de datos.")
