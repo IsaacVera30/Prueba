@@ -3,108 +3,102 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Monitor de Presión Arterial</title>
+    <title>ESP32 Monitor de Presión Arterial - Admin</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f4f4f4;
-            color: #333;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            font-family: Arial, sans-serif; margin: 0; padding: 20px;
+            background-color: #f0f2f5; color: #333;
+            display: flex; flex-direction: column; align-items: center;
         }
         .container {
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
-            width: 90%;
-            max-width: 700px;
-            margin-bottom: 20px;
-            text-align: center;
+            background-color: #fff; padding: 25px; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            width: 90%; max-width: 750px; margin-bottom: 25px; text-align: center;
         }
-        h1, h2 {
-            color: #333;
-        }
-        .status-display {
-            margin: 15px 0;
-            padding: 10px;
-            border-radius: 5px;
-            font-weight: bold;
-            color: white;
-        }
-        .status-autorizado { background-color: #28a745; }
-        .status-detenido { background-color: #dc3545; }
+        h1, h2 { color: #1a237e; } /* Azul oscuro */
+        h1 { margin-bottom: 20px; }
+        h2 { margin-top: 0; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px;}
 
-        .data-section p { margin: 8px 0; font-size: 1.1em; }
-        .data-section p strong { color: #555; }
+        .status-display {
+            margin: 15px 0; padding: 12px; border-radius: 5px;
+            font-weight: bold; color: white; font-size: 1.1em;
+        }
+        .status-autorizado { background-color: #4CAF50; } /* Verde */
+        .status-detenido { background-color: #f44336; } /* Rojo */
+        .status-capturando { background-color: #ff9800; } /* Naranja */
+
+        .data-section p { margin: 10px 0; font-size: 1.1em; line-height: 1.6; }
+        .data-section p strong { color: #3f51b5; } /* Azul índigo */
 
         button {
-            padding: 10px 18px;
-            font-size: 1em;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-            margin: 5px;
+            padding: 12px 20px; font-size: 1em; color: white;
+            border: none; border-radius: 5px; cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            margin: 8px 5px; min-width: 180px;
         }
-        .btn-autorizar { background-color: #28a745; }
-        .btn-autorizar:hover { background-color: #218838; }
-        .btn-detener { background-color: #dc3545; }
-        .btn-detener:hover { background-color: #c82333; }
-        /* .btn-actualizar { background-color: #007bff; } Ya no se necesita si quitamos los botones */
-        /* .btn-actualizar:hover { background-color: #0056b3; } */
+        button:active { transform: scale(0.98); }
+        .btn-autorizar { background-color: #4CAF50; }
+        .btn-autorizar:hover { background-color: #45a049; }
+        .btn-detener { background-color: #f44336; }
+        .btn-detener:hover { background-color: #e53935; }
+        .btn-accion { background-color: #2196F3; } /* Azul primario */
+        .btn-accion:hover { background-color: #1e88e5; }
+        .btn-guardar { background-color: #FFC107; color: #333;} /* Amarillo ámbar */
+        .btn-guardar:hover { background-color: #ffb300;}
 
-        table {
-            width: 100%;
-            margin-top: 20px;
-            border-collapse: collapse;
+        input[type="number"], input[type="text"] {
+            padding: 8px; margin: 5px; border: 1px solid #ccc;
+            border-radius: 4px; width: 100px;
         }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 10px;
-            text-align: left;
-        }
-        th {
-            background-color: #007bff;
-            color: white;
-        }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        .error-message { color: red; font-weight: bold; margin-top: 10px;}
+        .form-group { margin: 15px 0; }
+        .form-group label { margin-right: 10px; font-weight: bold; }
+
+        table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #3f51b5; color: white; } /* Azul índigo */
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .error-message, .info-message { font-weight: bold; margin-top: 10px; padding: 8px; border-radius: 4px; }
+        .error-message { color: #d32f2f; background-color: #ffcdd2; } /* Rojo claro */
+        .info-message { color: #388e3c; background-color: #c8e6c9;} /* Verde claro */
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h1>📟 Monitor de Presión Arterial</h1>
+        <h1>📟 Monitor de Presión Arterial - Admin</h1>
         
-        <div id="auth-status-display" class="status-display {{ 'status-autorizado' if estimacion.modo_autorizado else 'status-detenido' }}">
-            Modo Actual: {{ 'Registro Autorizado' if estimacion.modo_autorizado else 'Registro Detenido' }}
+        <div id="auth-status-display" class="status-display">Modo Actual: Cargando...</div>
+        <button id="toggleAuthButton">Cargando...</button>
+        <div id="captura-status-display" class="status-display" style="display: none;">Captura para Entrenamiento: Inactiva</div>
+        <p id="message-area" class="info-message" style="display: none;"></p>
+    </div>
+
+    <div class="container" id="training-capture-section" style="display: none;">
+        <h2>Captura para Muestra de Entrenamiento ML</h2>
+        <button id="startTrainingCaptureButton" class="btn-accion">Iniciar Captura de Segmento (5s)</button>
+        <div class="form-group">
+            <label for="pasRef">PAS Referencia:</label>
+            <input type="number" id="pasRef" placeholder="Ej: 120">
+            <label for="padRef">PAD Referencia:</label>
+            <input type="number" id="padRef" placeholder="Ej: 80">
         </div>
-        <button id="toggleAuthButton" class="{{ 'btn-detener' if estimacion.modo_autorizado else 'btn-autorizar' }}">
-            {{ 'Detener Registro' if estimacion.modo_autorizado else 'Autorizar Registro' }}
-        </button>
-        <p id="auth-message" class="error-message"></p>
+        <button id="saveTrainingSampleButton" class="btn-guardar" disabled>Guardar Muestra de Entrenamiento</button>
+        <p><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la PA con el tensiómetro de referencia. 3. Ingrese los valores PAS/PAD. 4. Guarde la muestra.</p>
     </div>
 
     <div class="container data-section">
-        <h2>Última Estimación Recibida</h2>
-        <p><strong>PAS (Sistólica):</strong> <span id="sysVal">{{ estimacion.sys }}</span> mmHg</p>
-        <p><strong>PAD (Diastólica):</strong> <span id="diaVal">{{ estimacion.dia }}</span> mmHg</p>
-        <p><strong>SpO2:</strong> <span id="spo2Val">{{ estimacion.spo2 }}</span> %</p>
-        <p><strong>HR:</strong> <span id="hrVal">{{ estimacion.hr }}</span> bpm</p>
-        <p><strong>Nivel:</strong> <span id="nivelVal">{{ estimacion.nivel }}</span></p>
-        <p><strong>Timestamp:</strong> <span id="timestampVal">{{ estimacion.timestamp }}</span></p>
-        <!-- Botón de actualizar estimación eliminado -->
+        <h2>Última Estimación Recibida (Tiempo Real)</h2>
+        <p><strong>PAS (Sistólica):</strong> <span id="sysVal">---</span> mmHg</p>
+        <p><strong>PAD (Diastólica):</strong> <span id="diaVal">---</span> mmHg</p>
+        <p><strong>SpO2:</strong> <span id="spo2Val">---</span> %</p>
+        <p><strong>HR:</strong> <span id="hrVal">---</span> bpm</p>
+        <p><strong>Nivel:</strong> <span id="nivelVal">---</span></p>
+        <p><strong>Timestamp:</strong> <span id="timestampVal">---</span></p>
     </div>
 
     <div class="container">
         <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <!-- Botón de actualizar tabla eliminado -->
-        <p id="history-error-message" class="error-message"></p>
+        <p id="history-error-message" class="error-message" style="display: none;"></p>
         <table id="medicionesTable">
             <thead>
                 <tr>
@@ -113,69 +107,152 @@
                     <th>PAS (SYS)</th>
                     <th>PAD (DIA)</th>
                     <th>Nivel</th>
-                    <!-- Si tu API devuelve 'timestamp' (de la DB) para esta tabla, añade la columna: -->
-                    <!-- <th>Timestamp DB</th> -->
-                </tr>
+                    </tr>
             </thead>
             <tbody>
-                <!-- Las filas se llenarán con JavaScript -->
-            </tbody>
+                </tbody>
         </table>
     </div>
 
     <script>
-        let estadoAutorizado = {{ estimacion.modo_autorizado | tojson }}; 
+        let estadoAutorizadoGeneral = false;
+        let estadoCapturandoEntrenamiento = false;
 
         const authButton = document.getElementById('toggleAuthButton');
         const authStatusDisplay = document.getElementById('auth-status-display');
-        const authMessage = document.getElementById('auth-message');
+        const messageArea = document.getElementById('message-area');
+        
+        const trainingCaptureSection = document.getElementById('training-capture-section');
+        const startTrainingCaptureButton = document.getElementById('startTrainingCaptureButton');
+        const saveTrainingSampleButton = document.getElementById('saveTrainingSampleButton');
+        const pasRefInput = document.getElementById('pasRef');
+        const padRefInput = document.getElementById('padRef');
+        const capturaStatusDisplay = document.getElementById('captura-status-display');
 
-        function actualizarEstadoBoton() {
-            if (estadoAutorizado) {
-                authButton.textContent = 'Detener Registro';
+
+        function mostrarMensaje(texto, tipo = 'info', duracion = 3000) {
+            messageArea.textContent = texto;
+            messageArea.className = tipo === 'error' ? 'error-message' : 'info-message';
+            messageArea.style.display = 'block';
+            setTimeout(() => messageArea.style.display = 'none', duracion);
+        }
+
+        function actualizarEstadoGeneralUI() {
+            if (estadoAutorizadoGeneral) {
+                authButton.textContent = 'Detener Registro General';
                 authButton.className = 'btn-detener';
-                authStatusDisplay.textContent = 'Modo Actual: Registro Autorizado';
+                authStatusDisplay.textContent = 'Modo General: Registro Autorizado';
                 authStatusDisplay.className = 'status-display status-autorizado';
+                trainingCaptureSection.style.display = 'block'; // Mostrar sección de captura
             } else {
-                authButton.textContent = 'Autorizar Registro';
+                authButton.textContent = 'Autorizar Registro General';
                 authButton.className = 'btn-autorizar';
-                authStatusDisplay.textContent = 'Modo Actual: Registro Detenido';
+                authStatusDisplay.textContent = 'Modo General: Registro Detenido';
                 authStatusDisplay.className = 'status-display status-detenido';
+                trainingCaptureSection.style.display = 'none'; // Ocultar sección de captura
+                // Si se detiene el registro general, también se detiene la captura de entrenamiento
+                if(estadoCapturandoEntrenamiento) {
+                    estadoCapturandoEntrenamiento = false; 
+                }
+            }
+            actualizarEstadoCapturaUI();
+        }
+        
+        function actualizarEstadoCapturaUI() {
+            if (estadoCapturandoEntrenamiento) {
+                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: ACTIVA (Recolectando datos...)';
+                capturaStatusDisplay.className = 'status-display status-capturando';
+                capturaStatusDisplay.style.display = 'block';
+                startTrainingCaptureButton.disabled = true;
+                saveTrainingSampleButton.disabled = false; // Habilitar guardado
+            } else {
+                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: Inactiva';
+                capturaStatusDisplay.className = 'status-display status-detenido'; // O un gris
+                // capturaStatusDisplay.style.display = 'none'; // Opcional: ocultar si no está activo
+                startTrainingCaptureButton.disabled = !estadoAutorizadoGeneral; // Habilitar solo si el registro general está activo
+                saveTrainingSampleButton.disabled = true;
             }
         }
 
-        authButton.addEventListener('click', function() {
-            const nuevoEstado = !estadoAutorizado;
-            authMessage.textContent = ''; 
 
+        authButton.addEventListener('click', function() {
+            const nuevoEstadoGeneral = !estadoAutorizadoGeneral;
             fetch('/api/autorizacion', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', },
-                body: JSON.stringify({ autorizado: nuevoEstado }),
+                body: JSON.stringify({ autorizado: nuevoEstadoGeneral }),
             })
             .then(response => response.json())
             .then(data => {
-                console.log('Respuesta de autorización:', data);
                 if (data.autorizado !== undefined) {
-                    estadoAutorizado = data.autorizado;
-                    actualizarEstadoBoton();
-                    authMessage.textContent = data.mensaje || `Estado cambiado a ${estadoAutorizado ? 'Autorizado' : 'Detenido'}`;
-                    setTimeout(() => authMessage.textContent = '', 3000);
-                } else {
-                    authMessage.textContent = 'Error: Respuesta inesperada del servidor.';
+                    estadoAutorizadoGeneral = data.autorizado;
+                    estadoCapturandoEntrenamiento = data.capturando_entrenamiento; // El backend puede resetear esto
+                    actualizarEstadoGeneralUI();
+                    mostrarMensaje(data.mensaje || `Estado general cambiado.`);
+                } else { mostrarMensaje('Error: Respuesta inesperada del servidor.', 'error'); }
+            })
+            .catch((error) => { console.error('Error:', error); mostrarMensaje('Error de red al cambiar autorización general.', 'error'); });
+        });
+
+        startTrainingCaptureButton.addEventListener('click', function() {
+            if (!estadoAutorizadoGeneral) {
+                mostrarMensaje("Debe autorizar el registro general primero.", "error");
+                return;
+            }
+            fetch('/api/iniciar_captura_entrenamiento', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if(data.capturando !== undefined) {
+                    estadoCapturandoEntrenamiento = data.capturando;
+                    actualizarEstadoCapturaUI();
+                    mostrarMensaje(data.mensaje || "Captura iniciada/detenida.");
+                     if(estadoCapturandoEntrenamiento){
+                        // Deshabilitar botón de guardar hasta que se llene el buffer o se detenga manualmente
+                        // Esto es conceptual, el servidor maneja el buffer.
+                        // Aquí podríamos poner un temporizador visual si quisiéramos.
+                        saveTrainingSampleButton.disabled = false; 
+                    }
+                } else { mostrarMensaje(data.error || "Error al iniciar captura.", "error");}
+            })
+            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al iniciar captura.", "error");});
+        });
+
+        saveTrainingSampleButton.addEventListener('click', function() {
+            const pas = pasRefInput.value;
+            const pad = padRefInput.value;
+
+            if (!pas || !pad) {
+                mostrarMensaje("Por favor, ingrese PAS y PAD de referencia.", "error");
+                return;
+            }
+            if (!estadoCapturandoEntrenamiento && !confirm("La captura no parece estar activa o ya se procesó. ¿Desea intentar guardar de todas formas con los últimos datos bufferizados? (Puede que el buffer esté vacío)")) {
+                 return;
+            }
+
+            fetch('/api/guardar_muestra_entrenamiento', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', },
+                body: JSON.stringify({ pas_referencia: parseFloat(pas), pad_referencia: parseFloat(pad) }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                mostrarMensaje(data.mensaje || data.error || "Respuesta del guardado de muestra.", data.error ? 'error' : 'info');
+                if (!data.error) {
+                    pasRefInput.value = ''; // Limpiar campos
+                    padRefInput.value = '';
+                    estadoCapturandoEntrenamiento = false; // Asumir que se detiene después de guardar
+                    actualizarEstadoCapturaUI();
+                    actualizarTablaMediciones(); // Actualizar historial por si algo cambió (opcional)
                 }
             })
-            .catch((error) => {
-                console.error('Error al cambiar autorización:', error);
-                authMessage.textContent = 'Error de red al cambiar estado de autorización.';
-            });
+            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al guardar muestra.", "error");});
         });
+
 
         function actualizarUltimaEstimacion() {
             fetch('/api/ultima_estimacion')
                 .then(response => response.json())
                 .then(data => {
-                    console.log("Última estimación recibida:", data);
                     document.getElementById('sysVal').textContent = data.sys || '---';
                     document.getElementById('diaVal').textContent = data.dia || '---';
                     document.getElementById('spo2Val').textContent = data.spo2 || '---';
@@ -183,30 +260,33 @@
                     document.getElementById('nivelVal').textContent = data.nivel || '---';
                     document.getElementById('timestampVal').textContent = data.timestamp || '---';
                     
-                    if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizado) {
-                        estadoAutorizado = data.modo_autorizado;
-                        actualizarEstadoBoton();
+                    // Sincronizar estados de UI si han cambiado en el backend
+                    if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
+                        estadoAutorizadoGeneral = data.modo_autorizado;
+                        actualizarEstadoGeneralUI();
+                    }
+                    if (data.capturando_entrenamiento !== undefined && data.capturando_entrenamiento !== estadoCapturandoEntrenamiento) {
+                        estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
+                        actualizarEstadoCapturaUI();
                     }
                 })
                 .catch(error => console.error('Error al actualizar última estimación:', error));
         }
 
         function actualizarTablaMediciones() {
+            // ... (sin cambios respecto a la versión anterior, ya era funcional) ...
             const historyErrorMessage = document.getElementById('history-error-message');
             historyErrorMessage.textContent = ''; 
+            historyErrorMessage.style.display = 'none';
 
             fetch('/api/ultimas_mediciones')
                 .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`Error HTTP ${response.status} al obtener mediciones.`);
-                    }
+                    if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); }
                     return response.json();
                 })
                 .then(data => {
-                    console.log("Últimas 20 mediciones recibidas:", data);
                     const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
                     tbody.innerHTML = ''; 
-
                     if (data && data.length > 0) {
                         data.forEach(medicion => {
                             let row = tbody.insertRow();
@@ -215,45 +295,38 @@
                             row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
                             row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
                             row.insertCell().textContent = medicion.nivel || 'N/A';
-                            // Si tu API devuelve 'timestamp' (de la DB) para esta tabla, necesitarías añadir una celda:
-                            // let cellTimestamp = row.insertCell();
-                            // cellTimestamp.textContent = medicion.timestamp_db || 'N/A'; 
                         });
                     } else if (data && data.length === 0) {
-                        let row = tbody.insertRow();
-                        let cell = row.insertCell();
-                        cell.colSpan = 5; 
-                        cell.textContent = 'No hay mediciones guardadas para mostrar.';
-                        cell.style.textAlign = 'center';
-                    } else {
-                         throw new Error('Respuesta inesperada o vacía del servidor para últimas mediciones.');
-                    }
+                        let row = tbody.insertRow(); let cell = row.insertCell();
+                        cell.colSpan = 5; cell.textContent = 'No hay mediciones guardadas.'; cell.style.textAlign = 'center';
+                    } else { throw new Error('Respuesta inesperada del servidor.'); }
                 })
                 .catch(error => {
-                    console.error('Error al actualizar tabla de mediciones:', error);
+                    console.error('Error al actualizar tabla:', error);
                     historyErrorMessage.textContent = `Error al cargar historial: ${error.message}`;
+                    historyErrorMessage.style.display = 'block';
                     const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                    tbody.innerHTML = ''; 
-                     let row = tbody.insertRow();
-                        let cell = row.insertCell();
-                        cell.colSpan = 5; 
-                        cell.textContent = 'Error al cargar historial.';
-                        cell.style.textAlign = 'center';
+                    tbody.innerHTML = ''; let row = tbody.insertRow(); let cell = row.insertCell();
+                    cell.colSpan = 5; cell.textContent = 'Error al cargar historial.'; cell.style.textAlign = 'center';
                 });
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            actualizarEstadoBoton(); 
+            // Cargar estados iniciales del servidor
+            fetch('/api/autorizacion') // Obtener estado de autorización general y de captura
+                .then(response => response.json())
+                .then(data => {
+                    if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
+                    if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
+                    actualizarEstadoGeneralUI(); // Esto llamará a actualizarEstadoCapturaUI
+                })
+                .catch(error => console.error('Error al obtener estado inicial de autorización:', error));
+
             actualizarUltimaEstimacion(); 
             actualizarTablaMediciones(); 
 
-            // --- ACTUALIZACIÓN AUTOMÁTICA ---
-            // Actualizar la "Última Estimación" cada 5 segundos
             setInterval(actualizarUltimaEstimacion, 5000); 
-
-            // Actualizar la tabla de "Últimas 20 Mediciones" cada 30 segundos
             setInterval(actualizarTablaMediciones, 30000); 
-            // --- FIN ACTUALIZACIÓN AUTOMÁTICA ---
         });
     </script>
 
@@ -261,12 +334,52 @@
 </html>
 ```
 
-**Cambios Realizados:**
+**Cambios y Nuevas Funcionalidades en `index.html`:**
 
-1.  **Botones de Actualización Manual Eliminados:**
-    * Se quitó el botón `<button onclick="actualizarUltimaEstimacion()" class="btn-actualizar">Actualizar Estimación Ahora</button>` de la sección "Última Estimación Recibida".
-    * Se quitó el botón `<button onclick="actualizarTablaMediciones()" class="btn-actualizar">Actualizar Tabla Ahora</button>` de la sección "Últimas 20 Mediciones Guardadas (Railway)".
-2.  **Estilos CSS para `.btn-actualizar` Comentados:**
-    * Como los botones se eliminaron, los estilos específicos para `.btn-actualizar` se comentaron para mantener el CSS limpio, aunque no afectarían si se dejaran.
+1.  **Variables de Estado JavaScript:**
+    * `estadoAutorizadoGeneral`: Rastrea si el registro general (para Drive) está activo.
+    * `estadoCapturandoEntrenamiento`: Rastrea si el servidor está actualmente bufferizando datos para una muestra de entrenamiento.
 
-La lógica de `setInterval` que ya tenías en el evento `DOMContentLoaded` se encargará de llamar a `actualizarUltimaEstimacion()` y `actualizarTablaMediciones()` periódicamente, manteniendo así la información actualizada sin necesidad de intervención manu
+2.  **Sección de "Captura para Muestra de Entrenamiento ML":**
+    * `training-capture-section`: Este `div` contiene los nuevos controles.
+    * Se muestra solo si `estadoAutorizadoGeneral` es `true`.
+    * **Botón "Iniciar Captura de Segmento (5s)":**
+        * Llama al endpoint `/api/iniciar_captura_entrenamiento` (POST).
+        * Actualiza `estadoCapturandoEntrenamiento` y la UI.
+    * **Campos de Entrada `pasRef` y `padRef`:** Para que ingreses los valores de tu tensiómetro.
+    * **Botón "Guardar Muestra de Entrenamiento":**
+        * Se habilita cuando la captura está activa (o después de que se inicia).
+        * Envía los valores `pas_referencia` y `pad_referencia` al endpoint `/api/guardar_muestra_entrenamiento` (POST).
+        * Limpia los campos y actualiza la UI después de guardar.
+
+3.  **Mensajes al Usuario:**
+    * `messageArea`: Un `p` para mostrar mensajes de éxito o error de las operaciones.
+    * `capturaStatusDisplay`: Muestra si la captura para entrenamiento está activa o inactiva.
+
+4.  **Funciones JavaScript Actualizadas y Nuevas:**
+    * `mostrarMensaje()`: Pequeña utilidad para mostrar mensajes temporales.
+    * `actualizarEstadoGeneralUI()`: Actualiza la UI del botón de autorización general y muestra/oculta la sección de captura de entrenamiento.
+    * `actualizarEstadoCapturaUI()`: Actualiza la UI específica de la sección de captura de entrenamiento (estado, botones).
+    * `DOMContentLoaded`: Al cargar la página, ahora primero consulta `/api/autorizacion` para obtener el estado inicial tanto de `autorizado` general como de `capturando_entrenamiento` del servidor, y luego actualiza toda la UI.
+
+5.  **Lógica de Botones:**
+    * El botón de "Autorizar Registro General" ahora también actualiza la visibilidad de la sección de captura de entrenamiento.
+    * Si se detiene el registro general, la captura de entrenamiento también se considera detenida en la UI (y el backend también lo maneja).
+
+**Cómo Funciona el Flujo Ahora:**
+
+1.  **Cargas `index.html`**: La página obtiene el estado actual de autorización y captura del servidor y configura la UI.
+2.  **Clic en "Autorizar Registro General"**: `estadoAutorizadoGeneral` se vuelve `true`. La sección "Captura para Muestra de Entrenamiento ML" se vuelve visible.
+3.  **Clic en "Iniciar Captura de Segmento"**: Envía una señal al servidor. `app.py` establece `capturando_entrenamiento = True` y comienza a llenar `buffer_datos_entrenamiento` con los datos que llegan del ESP32 durante el tiempo implícito del tamaño del buffer (o hasta que se detenga explícitamente si añades esa lógica). La UI refleja que la captura está activa.
+4.  **Tomas la Medición con tu Tensiómetro.**
+5.  **Ingresas los valores PAS y PAD de referencia** en los campos de texto.
+6.  **Clic en "Guardar Muestra de Entrenamiento"**: Envía los valores de referencia a `app.py`.
+    * `app.py` procesa el `buffer_datos_entrenamiento`, extrae características, las combina con tus valores PAS/PAD de referencia, guarda la línea en `registro_sensor_entrenamiento.csv`, y sube el CSV a Drive.
+    * `app.py` resetea `capturando_entrenamiento = False`.
+    * La UI se actualiza, mostrando mensajes de éxito/error y preparando para la siguiente captura.
+
+**Importante:**
+* **Frecuencia de Muestreo del Sensor y `MAX_BUFFER_ENTRENAMIENTO`:** En `app.py`, `MAX_BUFFER_ENTRENAMIENTO` está en 250. Si tu ESP32 envía datos cada segundo (como estaba antes), esto serían 250 segundos, lo cual es mucho. Si tu ESP32 envía datos más rápido (ej. cada 100ms = 10Hz), entonces 250 muestras serían 25 segundos. Debes ajustar `MAX_BUFFER_ENTRENAMIENTO` para que represente una duración de captura razonable (ej. 5-30 segundos). Si tu ESP32 envía datos cada 2 segundos, 250 muestras serían 500 segundos. Probablemente quieras que `MAX_BUFFER_ENTRENAMIENTO` sea más pequeño, por ejemplo, si tu ESP32 envía datos cada 2 segundos y quieres capturar por ~30 segundos, el buffer debería ser de unas 15 muestras. **O, mejor aún, el ESP32 podría enviar datos más frecuentemente (ej. cada 200ms) cuando `capturando_entrenamiento` está activo.** Por ahora, el ESP32 no sabe sobre `capturando_entrenamiento`, solo `app.py` lo sabe.
+* **Extracción de Características:** La función `extraer_caracteristicas_ppg` en `app.py` es un placeholder. **Debes llenarla con la lógica real para extraer características significativas de las señales IR y RED del segmento bufferizado.**
+
+Este `index.html` es bastante más interactivo y debería darte el control que necesitas para crear un dataset de entrenamiento de mejor calid
