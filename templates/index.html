@@ -1,91 +1,302 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>ESP32 Monitor de Presión Arterial</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f2f2f2;
-      text-align: center;
-      padding: 40px;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Monitor de Presión Arterial</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 700px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .status-display {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            color: white;
+        }
+        .status-autorizado { background-color: #28a745; }
+        .status-detenido { background-color: #dc3545; }
 
-    h1 {
-      color: #333;
-    }
+        .data-section p { margin: 8px 0; font-size: 1.1em; }
+        .data-section p strong { color: #555; }
 
-    .estado {
-      margin-top: 20px;
-      padding: 10px;
-      font-weight: bold;
-      color: white;
-      border-radius: 5px;
-      display: inline-block;
-    }
+        button {
+            padding: 10px 18px;
+            font-size: 1em;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin: 5px;
+        }
+        .btn-autorizar { background-color: #28a745; }
+        .btn-autorizar:hover { background-color: #218838; }
+        .btn-detener { background-color: #dc3545; }
+        .btn-detener:hover { background-color: #c82333; }
+        .btn-actualizar { background-color: #007bff; }
+        .btn-actualizar:hover { background-color: #0056b3; }
 
-    .autorizado {
-      background-color: #28a745;
-    }
-
-    .detenido {
-      background-color: #dc3545;
-    }
-
-    .resultado {
-      margin-top: 30px;
-      padding: 20px;
-      background-color: white;
-      border-radius: 10px;
-      display: inline-block;
-      text-align: left;
-      box-shadow: 0 0 10px rgba(0,0,0,0.1);
-    }
-
-    button {
-      margin: 15px;
-      padding: 12px 25px;
-      font-size: 16px;
-      cursor: pointer;
-      border: none;
-      border-radius: 6px;
-    }
-
-    .btn-verde {
-      background-color: #28a745;
-      color: white;
-    }
-
-    .btn-rojo {
-      background-color: #dc3545;
-      color: white;
-    }
-
-  </style>
+        table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        .error-message { color: red; font-weight: bold; margin-top: 10px;}
+    </style>
 </head>
 <body>
 
-  <h1>📟 ESP32 - Presión Arterial</h1>
+    <div class="container">
+        <h1>📟 Monitor de Presión Arterial</h1>
+        
+        <div id="auth-status-display" class="status-display {{ 'status-autorizado' if estimacion.modo_autorizado else 'status-detenido' }}">
+            Modo Actual: {{ 'Registro Autorizado' if estimacion.modo_autorizado else 'Registro Detenido' }}
+        </div>
+        <button id="toggleAuthButton" class="{{ 'btn-detener' if estimacion.modo_autorizado else 'btn-autorizar' }}">
+            {{ 'Detener Registro' if estimacion.modo_autorizado else 'Autorizar Registro' }}
+        </button>
+        <p id="auth-message" class="error-message"></p>
+    </div>
 
-  <div class="estado {{ 'autorizado' if autorizado else 'detenido' }}">
-    Estado: {{ 'Autorizado' if autorizado else 'Detenido' }}
-  </div>
+    <div class="container data-section">
+        <h2>Última Estimación Recibida</h2>
+        <p><strong>PAS (Sistólica):</strong> <span id="sysVal">{{ estimacion.sys }}</span> mmHg</p>
+        <p><strong>PAD (Diastólica):</strong> <span id="diaVal">{{ estimacion.dia }}</span> mmHg</p>
+        <p><strong>SpO2:</strong> <span id="spo2Val">{{ estimacion.spo2 }}</span> %</p>
+        <p><strong>HR:</strong> <span id="hrVal">{{ estimacion.hr }}</span> bpm</p>
+        <p><strong>Nivel:</strong> <span id="nivelVal">{{ estimacion.nivel }}</span></p>
+        <p><strong>Timestamp:</strong> <span id="timestampVal">{{ estimacion.timestamp }}</span></p>
+        <button onclick="actualizarUltimaEstimacion()" class="btn-actualizar">Actualizar Última Estimación</button>
+    </div>
 
-  <div class="resultado">
-    <p><strong>Presión Sistólica (SYS):</strong> {{ estimacion.sys }} mmHg</p>
-    <p><strong>Presión Diastólica (DIA):</strong> {{ estimacion.dia }} mmHg</p>
-    <p><strong>Nivel de Presión:</strong> {{ estimacion.nivel }}</p>
-  </div>
+    <div class="container">
+        <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
+        <button onclick="actualizarTablaMediciones()" class="btn-actualizar">Actualizar Tabla</button>
+        <p id="history-error-message" class="error-message"></p>
+        <table id="medicionesTable">
+            <thead>
+                <tr>
+                    <th>ID DB</th>
+                    <th>ID Paciente</th>
+                    <th>PAS (SYS)</th>
+                    <th>PAD (DIA)</th>
+                    <th>Nivel</th>
+                    <!-- Si tu query en app.py selecciona timestamp de la DB, añade la columna aquí -->
+                    <!-- <th>Timestamp DB</th> -->
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Las filas se llenarán con JavaScript -->
+            </tbody>
+        </table>
+    </div>
 
-  <div>
-    <form action="/api/autorizar" method="get">
-      <button type="submit" class="btn-verde">✅ Autorizar Registro</button>
-    </form>
+    <script>
+        let estadoAutorizado = {{ estimacion.modo_autorizado | tojson }}; // Obtener estado inicial de Flask
 
-    <form action="/api/detener" method="get">
-      <button type="submit" class="btn-rojo">⛔ Detener Registro</button>
-    </form>
-  </div>
+        const authButton = document.getElementById('toggleAuthButton');
+        const authStatusDisplay = document.getElementById('auth-status-display');
+        const authMessage = document.getElementById('auth-message');
+
+        function actualizarEstadoBoton() {
+            if (estadoAutorizado) {
+                authButton.textContent = 'Detener Registro';
+                authButton.className = 'btn-detener';
+                authStatusDisplay.textContent = 'Modo Actual: Registro Autorizado';
+                authStatusDisplay.className = 'status-display status-autorizado';
+            } else {
+                authButton.textContent = 'Autorizar Registro';
+                authButton.className = 'btn-autorizar';
+                authStatusDisplay.textContent = 'Modo Actual: Registro Detenido';
+                authStatusDisplay.className = 'status-display status-detenido';
+            }
+        }
+
+        authButton.addEventListener('click', function() {
+            const nuevoEstado = !estadoAutorizado;
+            authMessage.textContent = ''; // Limpiar mensajes anteriores
+
+            fetch('/api/autorizacion', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ autorizado: nuevoEstado }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Respuesta de autorización:', data);
+                if (data.autorizado !== undefined) {
+                    estadoAutorizado = data.autorizado;
+                    actualizarEstadoBoton();
+                    authMessage.textContent = data.mensaje || `Estado cambiado a ${estadoAutorizado ? 'Autorizado' : 'Detenido'}`;
+                    setTimeout(() => authMessage.textContent = '', 3000);
+                } else {
+                    authMessage.textContent = 'Error: Respuesta inesperada del servidor.';
+                }
+            })
+            .catch((error) => {
+                console.error('Error al cambiar autorización:', error);
+                authMessage.textContent = 'Error de red al cambiar estado de autorización.';
+            });
+        });
+
+        function actualizarUltimaEstimacion() {
+            fetch('/api/ultima_estimacion')
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Última estimación recibida:", data);
+                    document.getElementById('sysVal').textContent = data.sys || '---';
+                    document.getElementById('diaVal').textContent = data.dia || '---';
+                    document.getElementById('spo2Val').textContent = data.spo2 || '---';
+                    document.getElementById('hrVal').textContent = data.hr || '---';
+                    document.getElementById('nivelVal').textContent = data.nivel || '---';
+                    document.getElementById('timestampVal').textContent = data.timestamp || '---';
+                    
+                    // Actualizar estado del botón si cambió en el backend
+                    if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizado) {
+                        estadoAutorizado = data.modo_autorizado;
+                        actualizarEstadoBoton();
+                    }
+                })
+                .catch(error => console.error('Error al actualizar última estimación:', error));
+        }
+
+        function actualizarTablaMediciones() {
+            const historyErrorMessage = document.getElementById('history-error-message');
+            historyErrorMessage.textContent = ''; // Limpiar mensajes de error
+
+            fetch('/api/ultimas_mediciones')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Error HTTP ${response.status} al obtener mediciones.`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Últimas 20 mediciones recibidas:", data);
+                    const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
+                    tbody.innerHTML = ''; // Limpiar tabla anterior
+
+                    if (data && data.length > 0) {
+                        data.forEach(medicion => {
+                            let row = tbody.insertRow();
+                            row.insertCell().textContent = medicion.id !== undefined ? medicion.id : 'N/A';
+                            row.insertCell().textContent = medicion.id_paciente !== undefined ? medicion.id_paciente : 'N/A';
+                            row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
+                            row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
+                            row.insertCell().textContent = medicion.nivel || 'N/A';
+                            // Si tu API devuelve 'timestamp' para esta tabla, descomenta y ajusta:
+                            // row.insertCell().textContent = medicion.timestamp || 'N/A'; 
+                        });
+                    } else if (data && data.length === 0) {
+                        let row = tbody.insertRow();
+                        let cell = row.insertCell();
+                        cell.colSpan = 5; // Ajusta el colspan al número de columnas de tu tabla
+                        cell.textContent = 'No hay mediciones guardadas para mostrar.';
+                        cell.style.textAlign = 'center';
+                    } else {
+                         throw new Error('Respuesta inesperada o vacía del servidor para últimas mediciones.');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error al actualizar tabla de mediciones:', error);
+                    historyErrorMessage.textContent = `Error al cargar historial: ${error.message}`;
+                    const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
+                    tbody.innerHTML = ''; 
+                     let row = tbody.insertRow();
+                        let cell = row.insertCell();
+                        cell.colSpan = 5; 
+                        cell.textContent = 'Error al cargar historial.';
+                        cell.style.textAlign = 'center';
+                });
+        }
+
+        // Cargar estado inicial del botón y datos al cargar la página
+        document.addEventListener('DOMContentLoaded', function() {
+            actualizarEstadoBoton(); // Asegurar que el botón refleje el estado inicial
+            actualizarUltimaEstimacion(); // Cargar la última estimación
+            actualizarTablaMediciones(); // Cargar el historial de mediciones
+
+            // Opcional: Actualizar periódicamente
+            // setInterval(actualizarUltimaEstimacion, 5000); // Cada 5 segundos
+            // setInterval(actualizarTablaMediciones, 60000); // Cada 60 segundos
+        });
+    </script>
 
 </body>
 </html>
+```
+
+**Explicación del `index.html`:**
+
+* **Estructura HTML:**
+    * Título de la página.
+    * Sección para mostrar el estado de autorización y el botón para cambiarlo.
+    * Sección para mostrar la "Última Estimación Recibida" del ESP32.
+    * Sección para mostrar la tabla de "Últimas 20 Mediciones Guardadas".
+* **CSS Básico:** Se incluyen estilos para mejorar la apariencia.
+* **JavaScript:**
+    * `estadoAutorizado`: Variable para rastrear el estado de autorización en el cliente. Se inicializa con el valor pasado desde Flask (`{{ estimacion.modo_autorizado | tojson }}`).
+    * `actualizarEstadoBoton()`: Actualiza el texto y la clase del botón de autorización/detención y el mensaje de estado.
+    * **Evento del Botón de Autorización:**
+        * Al hacer clic, invierte el `estadoAutorizado`.
+        * Realiza una petición `POST` a `/api/autorizacion` con el nuevo estado (`{ "autorizado": nuevoEstado }`).
+        * Actualiza el botón y el mensaje de estado según la respuesta del servidor.
+    * `actualizarUltimaEstimacion()`:
+        * Realiza una petición `GET` a `/api/ultima_estimacion`.
+        * Actualiza los campos de PAS, PAD, SpO2, HR, Nivel y Timestamp en la página con los datos recibidos.
+        * También actualiza el estado del botón de autorización si ha cambiado en el backend.
+    * `actualizarTablaMediciones()`:
+        * Realiza una petición `GET` a `/api/ultimas_mediciones`.
+        * Limpia la tabla existente.
+        * Llena la tabla con las últimas 20 mediciones recibidas. Muestra `id`, `id_paciente`, `sys`, `dia`, `nivel`.
+        * Maneja el caso de que no haya datos o si hay un error.
+    * **Al Cargar la Página (`DOMContentLoaded`):**
+        * Se llama a `actualizarEstadoBoton()` para establecer el estado inicial del botón.
+        * Se llama a `actualizarUltimaEstimacion()` y `actualizarTablaMediciones()` para cargar los datos iniciales.
+        * Hay líneas comentadas para actualizar periódicamente los datos si lo deseas.
+
+**Importante sobre la Tabla de Últimas Mediciones:**
+
+* La query actual en `app.py` para `/api/ultimas_mediciones` es:
+    `SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20`
+* Esta query **no selecciona un `timestamp`** (a menos que tu tabla `mediciones` tenga una columna `timestamp` que se llene automáticamente por MySQL y la añadas a la SELECT).
+* Si quieres mostrar el `timestamp` en esta tabla, necesitas:
+    1.  Asegurarte de que tu tabla `mediciones` en Railway tenga una columna `timestamp` (y que se esté llenando, ya sea por la aplicación o por la base de datos con `DEFAULT CURRENT_TIMESTAMP`).
+    2.  Modificar la query en `app.py` en el endpoint `/api/ultimas_mediciones` para que también seleccione esa columna `timestamp`.
+    3.  Descomentar y ajustar la línea en el JavaScript de `index.html` para mostrar el `timestamp` en la tabla.
+
+Ahora, con este `index.html` y el `app.py` actualizado, deberías tener la funcionalidad completa que solicitaste. ¡Prueba y revisa los logs de Rend
