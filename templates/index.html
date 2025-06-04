@@ -55,8 +55,8 @@
         .btn-autorizar:hover { background-color: #218838; }
         .btn-detener { background-color: #dc3545; }
         .btn-detener:hover { background-color: #c82333; }
-        .btn-actualizar { background-color: #007bff; }
-        .btn-actualizar:hover { background-color: #0056b3; }
+        /* .btn-actualizar { background-color: #007bff; } Ya no se necesita si quitamos los botones */
+        /* .btn-actualizar:hover { background-color: #0056b3; } */
 
         table {
             width: 100%;
@@ -98,12 +98,12 @@
         <p><strong>HR:</strong> <span id="hrVal">{{ estimacion.hr }}</span> bpm</p>
         <p><strong>Nivel:</strong> <span id="nivelVal">{{ estimacion.nivel }}</span></p>
         <p><strong>Timestamp:</strong> <span id="timestampVal">{{ estimacion.timestamp }}</span></p>
-        <button onclick="actualizarUltimaEstimacion()" class="btn-actualizar">Actualizar Última Estimación</button>
+        <!-- Botón de actualizar estimación eliminado -->
     </div>
 
     <div class="container">
         <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <button onclick="actualizarTablaMediciones()" class="btn-actualizar">Actualizar Tabla</button>
+        <!-- Botón de actualizar tabla eliminado -->
         <p id="history-error-message" class="error-message"></p>
         <table id="medicionesTable">
             <thead>
@@ -113,7 +113,7 @@
                     <th>PAS (SYS)</th>
                     <th>PAD (DIA)</th>
                     <th>Nivel</th>
-                    <!-- Si tu query en app.py selecciona timestamp de la DB, añade la columna aquí -->
+                    <!-- Si tu API devuelve 'timestamp' (de la DB) para esta tabla, añade la columna: -->
                     <!-- <th>Timestamp DB</th> -->
                 </tr>
             </thead>
@@ -124,7 +124,7 @@
     </div>
 
     <script>
-        let estadoAutorizado = {{ estimacion.modo_autorizado | tojson }}; // Obtener estado inicial de Flask
+        let estadoAutorizado = {{ estimacion.modo_autorizado | tojson }}; 
 
         const authButton = document.getElementById('toggleAuthButton');
         const authStatusDisplay = document.getElementById('auth-status-display');
@@ -146,13 +146,11 @@
 
         authButton.addEventListener('click', function() {
             const nuevoEstado = !estadoAutorizado;
-            authMessage.textContent = ''; // Limpiar mensajes anteriores
+            authMessage.textContent = ''; 
 
             fetch('/api/autorizacion', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json', },
                 body: JSON.stringify({ autorizado: nuevoEstado }),
             })
             .then(response => response.json())
@@ -185,7 +183,6 @@
                     document.getElementById('nivelVal').textContent = data.nivel || '---';
                     document.getElementById('timestampVal').textContent = data.timestamp || '---';
                     
-                    // Actualizar estado del botón si cambió en el backend
                     if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizado) {
                         estadoAutorizado = data.modo_autorizado;
                         actualizarEstadoBoton();
@@ -196,7 +193,7 @@
 
         function actualizarTablaMediciones() {
             const historyErrorMessage = document.getElementById('history-error-message');
-            historyErrorMessage.textContent = ''; // Limpiar mensajes de error
+            historyErrorMessage.textContent = ''; 
 
             fetch('/api/ultimas_mediciones')
                 .then(response => {
@@ -208,7 +205,7 @@
                 .then(data => {
                     console.log("Últimas 20 mediciones recibidas:", data);
                     const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                    tbody.innerHTML = ''; // Limpiar tabla anterior
+                    tbody.innerHTML = ''; 
 
                     if (data && data.length > 0) {
                         data.forEach(medicion => {
@@ -218,13 +215,14 @@
                             row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
                             row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
                             row.insertCell().textContent = medicion.nivel || 'N/A';
-                            // Si tu API devuelve 'timestamp' para esta tabla, descomenta y ajusta:
-                            // row.insertCell().textContent = medicion.timestamp || 'N/A'; 
+                            // Si tu API devuelve 'timestamp' (de la DB) para esta tabla, necesitarías añadir una celda:
+                            // let cellTimestamp = row.insertCell();
+                            // cellTimestamp.textContent = medicion.timestamp_db || 'N/A'; 
                         });
                     } else if (data && data.length === 0) {
                         let row = tbody.insertRow();
                         let cell = row.insertCell();
-                        cell.colSpan = 5; // Ajusta el colspan al número de columnas de tu tabla
+                        cell.colSpan = 5; 
                         cell.textContent = 'No hay mediciones guardadas para mostrar.';
                         cell.style.textAlign = 'center';
                     } else {
@@ -244,15 +242,18 @@
                 });
         }
 
-        // Cargar estado inicial del botón y datos al cargar la página
         document.addEventListener('DOMContentLoaded', function() {
-            actualizarEstadoBoton(); // Asegurar que el botón refleje el estado inicial
-            actualizarUltimaEstimacion(); // Cargar la última estimación
-            actualizarTablaMediciones(); // Cargar el historial de mediciones
+            actualizarEstadoBoton(); 
+            actualizarUltimaEstimacion(); 
+            actualizarTablaMediciones(); 
 
-            // Opcional: Actualizar periódicamente
-            // setInterval(actualizarUltimaEstimacion, 5000); // Cada 5 segundos
-            // setInterval(actualizarTablaMediciones, 60000); // Cada 60 segundos
+            // --- ACTUALIZACIÓN AUTOMÁTICA ---
+            // Actualizar la "Última Estimación" cada 5 segundos
+            setInterval(actualizarUltimaEstimacion, 5000); 
+
+            // Actualizar la tabla de "Últimas 20 Mediciones" cada 30 segundos
+            setInterval(actualizarTablaMediciones, 30000); 
+            // --- FIN ACTUALIZACIÓN AUTOMÁTICA ---
         });
     </script>
 
@@ -260,43 +261,12 @@
 </html>
 ```
 
-**Explicación del `index.html`:**
+**Cambios Realizados:**
 
-* **Estructura HTML:**
-    * Título de la página.
-    * Sección para mostrar el estado de autorización y el botón para cambiarlo.
-    * Sección para mostrar la "Última Estimación Recibida" del ESP32.
-    * Sección para mostrar la tabla de "Últimas 20 Mediciones Guardadas".
-* **CSS Básico:** Se incluyen estilos para mejorar la apariencia.
-* **JavaScript:**
-    * `estadoAutorizado`: Variable para rastrear el estado de autorización en el cliente. Se inicializa con el valor pasado desde Flask (`{{ estimacion.modo_autorizado | tojson }}`).
-    * `actualizarEstadoBoton()`: Actualiza el texto y la clase del botón de autorización/detención y el mensaje de estado.
-    * **Evento del Botón de Autorización:**
-        * Al hacer clic, invierte el `estadoAutorizado`.
-        * Realiza una petición `POST` a `/api/autorizacion` con el nuevo estado (`{ "autorizado": nuevoEstado }`).
-        * Actualiza el botón y el mensaje de estado según la respuesta del servidor.
-    * `actualizarUltimaEstimacion()`:
-        * Realiza una petición `GET` a `/api/ultima_estimacion`.
-        * Actualiza los campos de PAS, PAD, SpO2, HR, Nivel y Timestamp en la página con los datos recibidos.
-        * También actualiza el estado del botón de autorización si ha cambiado en el backend.
-    * `actualizarTablaMediciones()`:
-        * Realiza una petición `GET` a `/api/ultimas_mediciones`.
-        * Limpia la tabla existente.
-        * Llena la tabla con las últimas 20 mediciones recibidas. Muestra `id`, `id_paciente`, `sys`, `dia`, `nivel`.
-        * Maneja el caso de que no haya datos o si hay un error.
-    * **Al Cargar la Página (`DOMContentLoaded`):**
-        * Se llama a `actualizarEstadoBoton()` para establecer el estado inicial del botón.
-        * Se llama a `actualizarUltimaEstimacion()` y `actualizarTablaMediciones()` para cargar los datos iniciales.
-        * Hay líneas comentadas para actualizar periódicamente los datos si lo deseas.
+1.  **Botones de Actualización Manual Eliminados:**
+    * Se quitó el botón `<button onclick="actualizarUltimaEstimacion()" class="btn-actualizar">Actualizar Estimación Ahora</button>` de la sección "Última Estimación Recibida".
+    * Se quitó el botón `<button onclick="actualizarTablaMediciones()" class="btn-actualizar">Actualizar Tabla Ahora</button>` de la sección "Últimas 20 Mediciones Guardadas (Railway)".
+2.  **Estilos CSS para `.btn-actualizar` Comentados:**
+    * Como los botones se eliminaron, los estilos específicos para `.btn-actualizar` se comentaron para mantener el CSS limpio, aunque no afectarían si se dejaran.
 
-**Importante sobre la Tabla de Últimas Mediciones:**
-
-* La query actual en `app.py` para `/api/ultimas_mediciones` es:
-    `SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20`
-* Esta query **no selecciona un `timestamp`** (a menos que tu tabla `mediciones` tenga una columna `timestamp` que se llene automáticamente por MySQL y la añadas a la SELECT).
-* Si quieres mostrar el `timestamp` en esta tabla, necesitas:
-    1.  Asegurarte de que tu tabla `mediciones` en Railway tenga una columna `timestamp` (y que se esté llenando, ya sea por la aplicación o por la base de datos con `DEFAULT CURRENT_TIMESTAMP`).
-    2.  Modificar la query en `app.py` en el endpoint `/api/ultimas_mediciones` para que también seleccione esa columna `timestamp`.
-    3.  Descomentar y ajustar la línea en el JavaScript de `index.html` para mostrar el `timestamp` en la tabla.
-
-Ahora, con este `index.html` y el `app.py` actualizado, deberías tener la funcionalidad completa que solicitaste. ¡Prueba y revisa los logs de Rend
+La lógica de `setInterval` que ya tenías en el evento `DOMContentLoaded` se encargará de llamar a `actualizarUltimaEstimacion()` y `actualizarTablaMediciones()` periódicamente, manteniendo así la información actualizada sin necesidad de intervención manu
