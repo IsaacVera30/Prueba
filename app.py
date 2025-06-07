@@ -391,3 +391,34 @@ if __name__ == "__main__":
     if not os.path.exists(effective_key_file_location): print(f"ADVERTENCIA: Credenciales '{effective_key_file_location}' no encontradas.")
     port = int(os.environ.get("PORT", 10000)) 
     app.run(host='0.0.0.0', port=port, debug=True)
+# AÑADIR ESTA RUTA NUEVA TEMPORALMENTE EN app.py
+# ¡¡¡ADVERTENCIA: ELIMINAR ESTA RUTA DESPUÉS DE USARLA!!!
+@app.route("/api/limpiar_base_de_datos_ahora/<string:clave_secreta>", methods=["POST"])
+def limpiar_base_de_datos(clave_secreta):
+    # Usamos una clave secreta simple para evitar que cualquiera la llame
+    if clave_secreta != "MI_CLAVE_SUPER_SECRETA_123":
+        return jsonify({"error": "No autorizado"}), 403
+
+    conn = conectar_db()
+    if conn is None:
+        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
+
+    cursor = conn.cursor()
+    query = "TRUNCATE TABLE mediciones;"
+    try:
+        print(f"LIMPIANDO BASE DE DATOS: Ejecutando query '{query}'")
+        cursor.execute(query)
+        conn.commit()
+        mensaje = "✅ Tabla 'mediciones' vaciada exitosamente."
+        print(mensaje)
+        return jsonify({"mensaje": mensaje}), 200
+    except mysql.connector.Error as err:
+        mensaje_error = f"❌ Error al vaciar la tabla: {err}"
+        print(mensaje_error)
+        conn.rollback()
+        return jsonify({"error": mensaje_error}), 500
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
+            print("Conexión a MySQL cerrada (limpiar_base_de_datos).")
