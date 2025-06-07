@@ -329,7 +329,14 @@ def guardar_muestra():
         return jsonify({"error": "Error al procesar la muestra", "detalle": str(e)}), 500
 
 # --- Fin Nuevos Endpoints ---
-
+# NUEVO ENDPOINT PARA DETENER LA CAPTURA DESDE LA UI
+@app.route("/api/detener_captura_entrenamiento", methods=["POST"])
+def detener_captura():
+    global capturando_entrenamiento
+    capturando_entrenamiento = False
+    print("✅ Captura de datos de entrenamiento DETENIDA por el cliente.")
+    return jsonify({"mensaje": "Captura de entrenamiento detenida.", "capturando": capturando_entrenamiento}), 200
+    
 
 @app.route("/api/ultimas_mediciones", methods=["GET"]) # Sin cambios
 def get_ultimas_mediciones_db():
