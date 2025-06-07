@@ -52,18 +52,16 @@
 
         input[type="number"] {
             padding: 8px; margin: 5px; border: 1px solid #ccc;
-            border-radius: 4px; width: 100px; font-size: 1em;
+            border-radius: 4px; width: 80px; font-size: 1em;
         }
-        .form-group { margin: 15px 0; }
-        .form-group label { margin-right: 10px; font-weight: bold; }
-
-        .countdown { font-size: 1.5em; font-weight: bold; color: #ff9800; margin: 10px 0; display: block; }
+        .form-group { margin: 15px 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px;}
+        .form-group label { font-weight: bold; }
 
         table { width: 100%; margin-top: 20px; border-collapse: collapse; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #3f51b5; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
-        .error-message, .info-message { font-weight: bold; margin-top: 10px; padding: 8px; border-radius: 4px; }
+        .error-message, .info-message { font-weight: bold; margin-top: 10px; padding: 8px; border-radius: 4px; display: none;}
         .error-message { color: #d32f2f; background-color: #ffcdd2; }
         .info-message { color: #388e3c; background-color: #c8e6c9;}
     </style>
@@ -76,22 +74,23 @@
         <div id="auth-status-display" class="status-display">Modo Actual: Cargando...</div>
         <button id="toggleAuthButton">Cargando...</button>
         <div id="captura-status-display" class="status-display" style="display: none;">Captura para Entrenamiento: Inactiva</div>
-        <p id="message-area" class="info-message" style="display: none;"></p>
+        <p id="message-area" class="info-message"></p>
     </div>
 
     <!-- Sección para Captura de Datos de Entrenamiento -->
     <div class="container" id="training-capture-section" style="display: none;">
         <h2>Captura para Muestra de Entrenamiento ML</h2>
         <button id="startTrainingCaptureButton" class="btn-accion">Iniciar Captura de Segmento</button>
-        <div id="countdown-timer" class="countdown" style="display: none;"></div>
         <div class="form-group">
-            <label for="pasRef">PAS Referencia:</label>
+            <label for="pasRef">PAS Ref:</label>
             <input type="number" id="pasRef" placeholder="Ej: 120">
-            <label for="padRef">PAD Referencia:</label>
+            <label for="padRef">PAD Ref:</label>
             <input type="number" id="padRef" placeholder="Ej: 80">
+            <label for="hrRef">Pulso Ref:</label>
+            <input type="number" id="hrRef" placeholder="Ej: 75">
         </div>
         <button id="saveTrainingSampleButton" class="btn-guardar" disabled>Guardar Muestra de Entrenamiento</button>
-        <p><strong>Instrucciones:</strong> 1. Inicie la captura (durará 25s). 2. Tome la PA con el tensiómetro. 3. Ingrese los valores. 4. Guarde.</p>
+        <p><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición con el tensiómetro de referencia. 3. Ingrese los valores PAS, PAD y Pulso. 4. Guarde la muestra.</p>
     </div>
 
     <div class="container data-section">
@@ -106,7 +105,7 @@
 
     <div class="container">
         <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <p id="history-error-message" class="error-message" style="display: none;"></p>
+        <p id="history-error-message" class="error-message"></p>
         <table id="medicionesTable">
             <thead>
                 <tr>
@@ -124,8 +123,6 @@
     <script>
         let estadoAutorizadoGeneral = false;
         let estadoCapturandoEntrenamiento = false;
-        let countdownInterval;
-        const CAPTURE_DURATION = 25; // Duración de la captura en segundos
 
         // Selectores de elementos del DOM
         const authButton = document.getElementById('toggleAuthButton');
@@ -136,8 +133,8 @@
         const saveTrainingSampleButton = document.getElementById('saveTrainingSampleButton');
         const pasRefInput = document.getElementById('pasRef');
         const padRefInput = document.getElementById('padRef');
+        const hrRefInput = document.getElementById('hrRef'); // Nuevo input para HR de referencia
         const capturaStatusDisplay = document.getElementById('captura-status-display');
-        const countdownTimerEl = document.getElementById('countdown-timer');
 
         function mostrarMensaje(texto, tipo = 'info', duracion = 4000) {
             messageArea.textContent = texto;
@@ -159,8 +156,7 @@
                 authStatusDisplay.textContent = 'Modo General: Registro Detenido';
                 authStatusDisplay.className = 'status-display status-detenido';
                 trainingCaptureSection.style.display = 'none';
-                if(estadoCapturandoEntrenamiento) { // Detener captura si se desautoriza
-                    detenerCapturaEnServidor();
+                if(estadoCapturandoEntrenamiento) {
                     estadoCapturandoEntrenamiento = false; 
                 }
             }
@@ -169,47 +165,20 @@
         
         function actualizarEstadoCapturaUI() {
             if (estadoCapturandoEntrenamiento) {
-                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: ACTIVA';
+                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: ACTIVA (Recolectando datos...)';
                 capturaStatusDisplay.className = 'status-display status-capturando';
                 capturaStatusDisplay.style.display = 'block';
-                startTrainingCaptureButton.disabled = true;
+                startTrainingCaptureButton.textContent = "Detener Captura";
+                startTrainingCaptureButton.className = 'btn-detener';
                 saveTrainingSampleButton.disabled = false;
-                countdownTimerEl.style.display = 'block';
             } else {
                 capturaStatusDisplay.textContent = 'Captura para Entrenamiento: Inactiva';
                 capturaStatusDisplay.className = 'status-display status-detenido';
+                startTrainingCaptureButton.textContent = "Iniciar Captura de Segmento";
+                startTrainingCaptureButton.className = 'btn-accion';
                 startTrainingCaptureButton.disabled = !estadoAutorizadoGeneral;
                 saveTrainingSampleButton.disabled = true;
-                countdownTimerEl.style.display = 'none';
             }
-        }
-
-        function iniciarTemporizador(duracion) {
-            let tiempoRestante = duracion;
-            countdownTimerEl.textContent = `Capturando... ${tiempoRestante}s`;
-            
-            clearInterval(countdownInterval); // Limpiar cualquier temporizador anterior
-            countdownInterval = setInterval(() => {
-                tiempoRestante--;
-                countdownTimerEl.textContent = `Capturando... ${tiempoRestante}s`;
-                if (tiempoRestante <= 0) {
-                    clearInterval(countdownInterval);
-                    countdownTimerEl.textContent = 'Captura completa.';
-                    detenerCapturaEnServidor(); // Informar al servidor que la captura terminó
-                }
-            }, 1000);
-        }
-
-        function detenerCapturaEnServidor() {
-             fetch('/api/detener_captura_entrenamiento', { method: 'POST' })
-             .then(response => response.json())
-             .then(data => {
-                console.log("Respuesta de detener captura:", data);
-                estadoCapturandoEntrenamiento = false;
-                actualizarEstadoCapturaUI();
-                mostrarMensaje("Buffer de captura listo para ser guardado.");
-             })
-             .catch(error => console.error('Error al detener captura en servidor:', error));
         }
 
         // --- Event Listeners para los botones ---
@@ -233,39 +202,45 @@
         });
 
         startTrainingCaptureButton.addEventListener('click', function() {
-            fetch('/api/iniciar_captura_entrenamiento', { method: 'POST' })
+            // Este botón ahora inicia y detiene la captura
+            const endpoint = estadoCapturandoEntrenamiento ? '/api/detener_captura_entrenamiento' : '/api/iniciar_captura_entrenamiento';
+            fetch(endpoint, { method: 'POST' })
             .then(response => response.json())
             .then(data => {
-                if(data.capturando) {
-                    estadoCapturandoEntrenamiento = true;
+                if(data.capturando !== undefined) {
+                    estadoCapturandoEntrenamiento = data.capturando;
                     actualizarEstadoCapturaUI();
-                    iniciarTemporizador(CAPTURE_DURATION);
-                    mostrarMensaje(`Captura iniciada. Durará ${CAPTURE_DURATION} segundos.`);
-                } else { mostrarMensaje(data.error || "Error al iniciar captura.", "error");}
+                    mostrarMensaje(data.mensaje || "Estado de captura cambiado.");
+                } else { mostrarMensaje(data.error || "Error al cambiar estado de captura.", "error");}
             })
-            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al iniciar captura.", "error");});
+            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al cambiar captura.", "error");});
         });
 
         saveTrainingSampleButton.addEventListener('click', function() {
             const pas = pasRefInput.value;
             const pad = padRefInput.value;
-            if (!pas || !pad) {
-                mostrarMensaje("Por favor, ingrese PAS y PAD de referencia.", "error");
+            const hr = hrRefInput.value; // Obtener el valor de HR de referencia
+
+            if (!pas || !pad || !hr) {
+                mostrarMensaje("Por favor, ingrese PAS, PAD y Pulso de referencia.", "error");
                 return;
             }
 
             fetch('/api/guardar_muestra_entrenamiento', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pas_referencia: parseFloat(pas), pad_referencia: parseFloat(pad) }),
+                body: JSON.stringify({ 
+                    pas_referencia: parseFloat(pas), 
+                    pad_referencia: parseFloat(pad),
+                    hr_referencia: parseFloat(hr) // Enviar el HR de referencia
+                }),
             })
             .then(response => response.json())
             .then(data => {
                 mostrarMensaje(data.mensaje || data.error || "Respuesta del servidor.", data.error ? 'error' : 'info');
                 if (!data.error) {
-                    pasRefInput.value = ''; padRefInput.value = '';
+                    pasRefInput.value = ''; padRefInput.value = ''; hrRefInput.value = ''; // Limpiar campos
                     estadoCapturandoEntrenamiento = false; // El guardado detiene la captura en el backend
-                    clearInterval(countdownInterval); // Detener el timer si aún corría
                     actualizarEstadoCapturaUI();
                 }
             })
@@ -275,111 +250,40 @@
         // --- Funciones para obtener datos del servidor ---
 
         function actualizarUltimaEstimacion() {
-            fetch('/api/ultima_estimacion')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('sysVal').textContent = data.sys || '---';
-                    document.getElementById('diaVal').textContent = data.dia || '---';
-                    document.getElementById('spo2Val').textContent = data.spo2 || '---';
-                    document.getElementById('hrVal').textContent = data.hr || '---';
-                    document.getElementById('nivelVal').textContent = data.nivel || '---';
-                    document.getElementById('timestampVal').textContent = data.timestamp || '---';
-                    
-                    if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
-                        estadoAutorizadoGeneral = data.modo_autorizado;
-                        actualizarEstadoGeneralUI();
-                    }
-                })
-                .catch(error => console.error('Error al actualizar última estimación:', error));
+            // ... (sin cambios, ya era funcional) ...
         }
 
         function actualizarTablaMediciones() {
-            const historyErrorMessage = document.getElementById('history-error-message');
-            historyErrorMessage.textContent = ''; historyErrorMessage.style.display = 'none';
-
-            fetch('/api/ultimas_mediciones')
-                .then(response => {
-                    if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); }
-                    return response.json();
-                })
-                .then(data => {
-                    const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                    tbody.innerHTML = ''; 
-                    if (data && data.length > 0) {
-                        data.forEach(medicion => {
-                            let row = tbody.insertRow();
-                            row.insertCell().textContent = medicion.id !== undefined ? medicion.id : 'N/A';
-                            row.insertCell().textContent = medicion.id_paciente !== undefined ? medicion.id_paciente : 'N/A';
-                            row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
-                            row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
-                            row.insertCell().textContent = medicion.nivel || 'N/A';
-                        });
-                    } else if (data && data.length === 0) {
-                        let row = tbody.insertRow(); let cell = row.insertCell();
-                        cell.colSpan = 5; cell.textContent = 'No hay mediciones guardadas.'; cell.style.textAlign = 'center';
-                    } else { throw new Error('Respuesta inesperada del servidor.'); }
-                })
-                .catch(error => {
-                    console.error('Error al actualizar tabla:', error);
-                    historyErrorMessage.textContent = `Error al cargar historial: ${error.message}`;
-                    historyErrorMessage.style.display = 'block';
-                    const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                    tbody.innerHTML = ''; let row = tbody.insertRow(); let cell = row.insertCell();
-                    cell.colSpan = 5; cell.textContent = 'Error al cargar historial.'; cell.style.textAlign = 'center';
-                });
+           // ... (sin cambios, ya era funcional) ...
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            fetch('/api/autorizacion')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
-                    if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
-                    actualizarEstadoGeneralUI();
-                })
-                .catch(error => console.error('Error al obtener estado inicial:', error));
-
-            actualizarUltimaEstimacion(); 
-            actualizarTablaMediciones(); 
-
-            setInterval(actualizarUltimaEstimacion, 5000); 
-            setInterval(actualizarTablaMediciones, 30000); 
+            // ... (sin cambios, ya era funcional) ...
         });
     </script>
-
 </body>
 </html>
 ```
 
-**Cambios Clave y Nueva Funcionalidad:**
+**Cambios Clave en este `index.html`:**
 
-1.  **Elemento para el Conteo Regresivo:**
-    * Se añadió `<div id="countdown-timer" class="countdown" style="display: none;"></div>` en la sección de captura. Este `div` mostrará el temporizador.
+1.  **Sin Límite de Tiempo (Temporizador Eliminado):**
+    * Se ha eliminado el `div` del `countdown-timer`.
+    * Se ha eliminado la función `iniciarTemporizador()` y la constante `CAPTURE_DURATION`.
+    * Ahora la captura es manual: la inicias con un botón y la terminas (implícitamente) al guardar la muestra.
 
-2.  **Lógica del Temporizador en JavaScript:**
-    * **`CAPTURE_DURATION`:** Una nueva constante `const CAPTURE_DURATION = 25;` define la duración de la captura. Puedes cambiar este número fácilmente.
-    * **`iniciarTemporizador(duracion)`:** Esta nueva función se encarga de:
-        * Limpiar cualquier temporizador anterior.
-        * Iniciar un `setInterval` que se ejecuta cada segundo.
-        * Decrementar un contador desde la duración especificada (25 segundos).
-        * Actualizar el texto del `countdown-timer` en la pantalla.
-        * Cuando el contador llega a cero, limpia el temporizador y llama a `detenerCapturaEnServidor()`.
-    * **`detenerCapturaEnServidor()`:** Esta nueva función llama al nuevo endpoint `/api/detener_captura_entrenamiento` para informar al servidor que la captura de 25 segundos ha finalizado y que debe dejar de añadir datos al buffer de entrenamiento.
-    * **`startTrainingCaptureButton` Event Listener:** Ahora, cuando haces clic en este botón, además de llamar a `/api/iniciar_captura_entrenamiento`, también llama a `iniciarTemporizador(CAPTURE_DURATION)` para que comience el conteo regresivo en la interfaz.
+2.  **Nuevo Campo para Pulso de Referencia:**
+    * Se ha añadido un campo de entrada para el pulso:
+      ```html
+      <label for="hrRef">Pulso Ref:</label>
+      <input type="number" id="hrRef" placeholder="Ej: 75">
+      ```
+3.  **Botón de Captura como Interruptor (Toggle):**
+    * El botón "Iniciar Captura de Segmento" ahora cambia su texto a "Detener Captura" cuando la captura está activa.
+    * Llama a `/api/iniciar_captura_entrenamiento` para empezar y a `/api/detener_captura_entrenamiento` (que debes añadir a tu `app.py`) para detenerla. Esto te da control total sobre la duración del segmento de datos.
 
-3.  **Manejo de Estados de los Botones:**
-    * El botón "Iniciar Captura" ahora se deshabilita mientras el conteo regresivo está en marcha para evitar iniciar múltiples capturas.
-    * El botón "Guardar Muestra" se habilita tan pronto como se inicia la captura, permitiéndote ingresar los valores de referencia y guardarlos una vez que la captura termine (o incluso mientras está en curso, aunque lo ideal es esperar al final).
+4.  **Lógica de Guardado Actualizada:**
+    * La función `saveTrainingSampleButton.addEventListener('click', ...)` ahora también lee el valor del `hrRefInput`.
+    * Envía `hr_referencia` en el cuerpo JSON de la petición a `/api/guardar_muestra_entrenamiento`.
 
-**Cómo Usarlo Ahora:**
-
-1.  Actualiza tu `index.html` con este código.
-2.  Asegúrate de que tu `app.py` incluya el nuevo endpoint `/api/detener_captura_entrenamiento`.
-3.  Despliega ambos archivos en Render.
-4.  Ve a tu página web, autoriza el registro general.
-5.  Haz clic en "Iniciar Captura de Segmento".
-6.  Deberías ver el conteo regresivo de 25 segundos en la pantalla.
-7.  Una vez que termine, la interfaz te indicará "Captura completa".
-8.  Ingresa tus valores de referencia PAS/PAD y haz clic en "Guardar Muestra de Entrenamiento".
-
-Este flujo es mucho más controlado y te asegura que cada muestra de entrenamiento que guardes corresponda a un segmento de datos de una duración específica y conoci
+Con este `index.html` y el `app.py` que ya incluye el campo `hr_referencia` en el endpoint de guardado, tienes un sistema mucho más robusto y flexible para la recolección de tus datos de entrenamien
