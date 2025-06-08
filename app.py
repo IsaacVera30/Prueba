@@ -32,7 +32,8 @@ buffer_datos_entrenamiento = []
 
 ultima_estimacion = {
     "sys": "---", "dia": "---", "spo2": "---", 
-    "hr": "---", "nivel": "---", "timestamp": "---", "modo_autorizado": False
+    "hr": "---", "nivel": "---", "timestamp": "---", "modo_autorizado": False,
+    "capturando_entrenamiento": False
 }
 ventana_ir = []
 ventana_red = []
@@ -50,14 +51,13 @@ print(f"Configuración DB: {DB_CONFIG['host']}, {DB_CONFIG['user']}, {DB_CONFIG[
 KEY_FILE_LOCATION_FALLBACK = 'service_account.json' 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") 
-CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" # Nuevo nombre para el CSV de calidad
+CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" 
 if not FOLDER_ID or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
     print("⚠️ Advertencia: GOOGLE_DRIVE_FOLDER_ID no está bien configurado.")
 
 # --- Funciones de Procesamiento y Auxiliares ---
 
 def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
-    """Aplica un filtro Butterworth pasabanda a la señal PPG."""
     try:
         nyquist = 0.5 * fs
         low = lowcut / nyquist
@@ -70,14 +70,8 @@ def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
         return np.array(senal)
 
 def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_promedio):
-    """
-    Extrae características representativas de un segmento de señales PPG.
-    ¡ESTA FUNCIÓN ES CLAVE Y NECESITAS DESARROLLARLA CON CARACTERÍSTICAS ÚTILES!
-    """
     ir_filtrado = filtrar_senal_ppg(segmento_ir)
     red_filtrado = filtrar_senal_ppg(segmento_red)
-
-    # Placeholder: Aquí debes implementar la extracción de características robustas.
     caracteristicas = {
         "hr_promedio_sensor": round(hr_promedio, 2) if hr_promedio is not None else -1,
         "spo2_promedio_sensor": round(spo2_promedio, 2) if spo2_promedio is not None else -1,
@@ -85,7 +79,6 @@ def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_pro
         "red_mean_filtrado": round(np.mean(red_filtrado), 2) if len(red_filtrado) > 0 else -1,
         "ir_std_filtrado": round(np.std(ir_filtrado), 2) if len(ir_filtrado) > 0 else -1,
         "red_std_filtrado": round(np.std(red_filtrado), 2) if len(red_filtrado) > 0 else -1
-        # ... Añade aquí tus características PPG más avanzadas ...
     }
     return caracteristicas
 
@@ -171,8 +164,9 @@ def subir_archivo_a_drive(file_path, file_name_on_drive):
 # --- Endpoints Flask ---
 @app.route("/")
 def home():
-    global ultima_estimacion, autorizado
+    global ultima_estimacion, autorizado, capturando_entrenamiento
     ultima_estimacion["modo_autorizado"] = autorizado 
+    ultima_estimacion["capturando_entrenamiento"] = capturando_entrenamiento
     return render_template("index.html", autorizado=autorizado, estimacion=ultima_estimacion)
 
 @app.route("/api/presion", methods=["POST"])
@@ -221,22 +215,27 @@ def api_procesar_presion():
         return jsonify({ "sys": pas_estimada, "dia": pad_estimada, "spo2": spo2_estimada_rt, "nivel": nivel_presion }), 200
     except Exception as e: print(f"❌ Error en /api/presion: {e}"); import traceback; traceback.print_exc(); return jsonify({"error": "Error interno", "detalle": str(e)}), 500
 
-# --- NUEVOS ENDPOINTS PARA CAPTURA DE ENTRENAMIENTO ---
 @app.route("/api/iniciar_captura_entrenamiento", methods=["POST"])
 def iniciar_captura():
     global capturando_entrenamiento, buffer_datos_entrenamiento, autorizado
     if not autorizado: 
         return jsonify({"error": "El registro general debe estar autorizado."}), 403
-    
     capturando_entrenamiento = True
     buffer_datos_entrenamiento = [] 
     print("✅ Captura de datos de entrenamiento INICIADA.")
     return jsonify({"mensaje": "Captura de entrenamiento iniciada.", "capturando": capturando_entrenamiento}), 200
 
+# Endpoint para DETENER la captura manualmente (si el usuario quiere parar antes)
+@app.route("/api/detener_captura_entrenamiento", methods=["POST"])
+def detener_captura():
+    global capturando_entrenamiento
+    capturando_entrenamiento = False
+    print("✅ Captura de datos de entrenamiento DETENIDA por el usuario.")
+    return jsonify({"mensaje": "Captura de entrenamiento detenida. Listo para guardar.", "capturando": capturando_entrenamiento}), 200
+
 @app.route("/api/guardar_muestra_entrenamiento", methods=["POST"])
 def guardar_muestra():
     global capturando_entrenamiento, buffer_datos_entrenamiento, autorizado
-
     if not autorizado: return jsonify({"error": "El registro general no está autorizado."}), 403
     if not buffer_datos_entrenamiento: return jsonify({"error": "No hay datos en el buffer para guardar."}), 400
 
@@ -244,7 +243,7 @@ def guardar_muestra():
         data_referencia = request.get_json()
         pas_ref = float(data_referencia.get("pas_referencia"))
         pad_ref = float(data_referencia.get("pad_referencia"))
-        hr_ref = float(data_referencia.get("hr_referencia")) # Nuevo campo para HR de referencia
+        hr_ref = float(data_referencia.get("hr_referencia")) # Recibir HR de referencia
 
         if pas_ref is None or pad_ref is None or hr_ref is None:
             return jsonify({"error": "Valores de PAS, PAD y HR de referencia son requeridos."}), 400
@@ -263,6 +262,7 @@ def guardar_muestra():
             
             with open(CSV_FILENAME, mode='a', newline='') as file_csv:
                 writer = csv.writer(file_csv)
+                # Encabezado (si el archivo es nuevo y está vacío)
                 header = list(caracteristicas_extraidas.keys()) + ["hr_referencia", "pas_referencia", "pad_referencia", "timestamp_captura"]
                 if os.stat(CSV_FILENAME).st_size == 0:
                     writer.writerow(header)
@@ -274,7 +274,7 @@ def guardar_muestra():
             if FOLDER_ID and FOLDER_ID != "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
                 subir_archivo_a_drive(CSV_FILENAME, CSV_FILENAME)
         
-        capturando_entrenamiento = False 
+        capturando_entrenamiento = False # Detener captura después de guardar
         buffer_datos_entrenamiento = [] 
         return jsonify({"mensaje": "Muestra de entrenamiento guardada exitosamente."}), 200
 
@@ -285,18 +285,16 @@ def guardar_muestra():
 
 @app.route("/api/ultimas_mediciones", methods=["GET"])
 def get_ultimas_mediciones_db():
-    conn = conectar_db()
+    conn = conectar_db();
     if conn is None: return jsonify({"error": "No DB con"}), 500
     cursor = conn.cursor(dictionary=True) 
     query = "SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20"
-    mediciones = []
     try:
         cursor.execute(query); mediciones = cursor.fetchall()
-        print(f"get_ultimas_mediciones_db: {len(mediciones)} obtenidas.")
-    except mysql.connector.Error as err: print(f"❌ Error MySQL (ultimas_med): {err}"); return jsonify({"error": "Error DB", "detalle": str(err)}), 500
+        return jsonify(mediciones), 200
+    except mysql.connector.Error as err: print(f"❌ Error MySQL: {err}"); return jsonify({"error": "Error DB", "detalle": str(err)}), 500
     finally:
         if conn.is_connected(): cursor.close(); conn.close()
-    return jsonify(mediciones), 200
 
 @app.route("/api/autorizacion", methods=["GET", "POST"])
 def api_control_autorizacion():
@@ -304,18 +302,18 @@ def api_control_autorizacion():
     if request.method == "POST":
         try:
             data = request.get_json()
-            if data is None or "autorizado" not in data: return jsonify({"error": "Payload JSON esperado"}), 400
+            if data is None or "autorizado" not in data: return jsonify({"error": "Payload JSON"}), 400
             nuevo_estado = data.get("autorizado")
             if isinstance(nuevo_estado, bool):
                 autorizado = nuevo_estado
-                print(f"Estado de autorización general cambiado a: {autorizado}")
+                print(f"Autorización general cambiada a: {autorizado}")
                 if not autorizado: 
                     capturando_entrenamiento = False; buffer_datos_entrenamiento = []
-                    print("Captura de entrenamiento detenida por detención de registro general.")
+                    print("Captura de entrenamiento detenida.")
                 ultima_estimacion["modo_autorizado"] = autorizado 
                 ultima_estimacion["capturando_entrenamiento"] = capturando_entrenamiento
-                return jsonify({"mensaje": f"Autorización: {autorizado}", "autorizado": autorizado, "capturando_entrenamiento": capturando_entrenamiento}), 200
-            else: return jsonify({"error": "Valor 'autorizado' debe ser booleano"}), 400
+                return jsonify({"mensaje": f"Autorización: {autorizado}", "autorizado": autorizado, "capturando": capturando_entrenamiento}), 200
+            else: return jsonify({"error": "'autorizado' debe ser booleano"}), 400
         except Exception as e: print(f"❌ Error POST /api/autorizacion: {e}"); return jsonify({"error": "Error interno", "detalle": str(e)}), 400
     else: # GET
         return jsonify({"autorizado": autorizado, "capturando_entrenamiento": capturando_entrenamiento}), 200
@@ -329,9 +327,6 @@ def get_ultima_medicion():
 
 if __name__ == "__main__":
     print("Iniciando servidor Flask para desarrollo local...")
-    if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]): print("ADVERTENCIA: Faltan variables DB.")
-    if not FOLDER_ID or FOLDER_ID == 'tu_id_de_carpeta_en_google_drive_placeholder' or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-": print("ADVERTENCIA: GOOGLE_DRIVE_FOLDER_ID no configurado.")
-    effective_key_file_location = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', KEY_FILE_LOCATION_FALLBACK)
-    if not os.path.exists(effective_key_file_location): print(f"ADVERTENCIA: Credenciales '{effective_key_file_location}' no encontradas.")
+    # ... (advertencias de configuración) ...
     port = int(os.environ.get("PORT", 10000)) 
     app.run(host='0.0.0.0', port=port, debug=True)
