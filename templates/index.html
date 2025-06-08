@@ -3,187 +3,310 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Monitor de Presión Arterial - Admin</title>
+    <title>Panel de Control - Monitor de PA</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
+        :root {
+            --primary-color: #3f51b5; /* Indigo */
+            --secondary-color: #f50057; /* Pink A400 for alerts */
+            --success-color: #4CAF50; /* Green */
+            --warning-color: #ff9800; /* Orange */
+            --light-bg: #f4f7f6;
+            --card-bg: #ffffff;
+            --text-color: #333;
+            --text-light: #666;
+            --border-color: #e0e0e0;
+            --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
         body {
-            font-family: Arial, sans-serif; margin: 0; padding: 20px;
-            background-color: #f0f2f5; color: #333;
-            display: flex; flex-direction: column; align-items: center;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--light-bg);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
         }
+
+        .main-title {
+            font-size: 2.5em;
+            color: var(--primary-color);
+            font-weight: 700;
+        }
+
         .container {
-            background-color: #fff; padding: 25px; border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            width: 90%; max-width: 750px; margin-bottom: 25px; text-align: center;
+            background-color: var(--card-bg);
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            width: 95%;
+            max-width: 800px;
+            text-align: center;
         }
-        h1, h2 { color: #1a237e; }
-        h1 { margin-bottom: 20px; }
-        h2 { margin-top: 0; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px;}
+
+        h2 {
+            font-size: 1.5em;
+            color: var(--primary-color);
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--border-color);
+        }
 
         .status-display {
-            margin: 15px 0; padding: 12px; border-radius: 5px;
-            font-weight: bold; color: white; font-size: 1.1em;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: 500;
+            color: white;
+            font-size: 1.1em;
+            margin: 15px auto;
+            max-width: 400px;
         }
-        .status-autorizado { background-color: #4CAF50; }
-        .status-detenido { background-color: #f44336; }
-        .status-capturando { background-color: #ff9800; }
 
-        .data-section p { margin: 10px 0; font-size: 1.1em; line-height: 1.6; }
-        .data-section p strong { color: #3f51b5; }
+        .status-autorizado { background-color: var(--success-color); }
+        .status-detenido { background-color: var(--secondary-color); }
+        .status-capturando { background-color: var(--warning-color); }
+
+        .data-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            text-align: left;
+            margin-top: 20px;
+        }
+
+        .data-item {
+            background: var(--light-bg);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .data-item strong {
+            display: block;
+            color: var(--primary-color);
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        .data-item span {
+            font-size: 1.4em;
+            font-weight: 700;
+        }
 
         button {
-            padding: 12px 20px; font-size: 1em; color: white;
-            border: none; border-radius: 5px; cursor: pointer;
-            transition: background-color 0.3s ease, transform 0.1s ease;
-            margin: 8px 5px; min-width: 180px;
+            padding: 12px 24px;
+            font-size: 1em;
+            font-weight: 500;
+            color: white;
+            background-color: var(--primary-color);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            margin: 10px 5px;
+        }
+        button:hover:not(:disabled) {
+            opacity: 0.9;
+        }
+        button:active:not(:disabled) {
+            transform: scale(0.97);
         }
         button:disabled {
-            background-color: #cccccc;
+            background-color: #ccc;
             cursor: not-allowed;
         }
-        button:active:not(:disabled) { transform: scale(0.98); }
-        .btn-autorizar { background-color: #4CAF50; }
-        .btn-autorizar:hover:not(:disabled) { background-color: #45a049; }
-        .btn-detener { background-color: #f44336; }
-        .btn-detener:hover:not(:disabled) { background-color: #e53935; }
-        .btn-accion { background-color: #2196F3; }
-        .btn-accion:hover:not(:disabled) { background-color: #1e88e5; }
-        .btn-guardar { background-color: #FFC107; color: #333;}
-        .btn-guardar:hover:not(:disabled) { background-color: #ffb300;}
 
-        input[type="number"] {
-            padding: 8px; margin: 5px; border: 1px solid #ccc;
-            border-radius: 4px; width: 80px; font-size: 1em;
+        .btn-toggle-off { background-color: var(--success-color); }
+        .btn-toggle-on { background-color: var(--secondary-color); }
+        
+        .training-controls {
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            padding-top: 20px;
         }
-        .form-group { margin: 15px 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px;}
-        .form-group label { font-weight: bold; }
+        
+        .form-group {
+            margin: 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+        }
 
-        table { width: 100%; margin-top: 20px; border-collapse: collapse; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-        th { background-color: #3f51b5; color: white; }
-        tr:nth-child(even) { background-color: #f9f9f9; }
-        .error-message, .info-message { font-weight: bold; margin-top: 10px; padding: 8px; border-radius: 4px; display: none;}
-        .error-message { color: #d32f2f; background-color: #ffcdd2; }
-        .info-message { color: #388e3c; background-color: #c8e6c9;}
+        .form-group label {
+            font-weight: 500;
+        }
+        
+        input[type="number"] {
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            width: 80px;
+            font-size: 1.1em;
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            margin-top: 15px;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 500;
+        }
+        tr:nth-child(even) { background-color: var(--light-bg); }
+        
+        .message-area { font-weight: 500; margin-top: 15px; padding: 10px; border-radius: 6px; display: none; }
+        .message-error { color: #721c24; background-color: #f8d7da; }
+        .message-info { color: #155724; background-color: #d4edda; }
     </style>
 </head>
 <body>
 
+    <h1 class="main-title">Panel de Control del Monitor de PA</h1>
+
     <div class="container">
-        <h1>📟 Monitor de Presión Arterial - Admin</h1>
-        
-        <div id="auth-status-display" class="status-display">Modo Actual: Cargando...</div>
+        <h2>Estado y Controles</h2>
+        <div id="auth-status-display" class="status-display">Cargando...</div>
         <button id="toggleAuthButton">Cargando...</button>
-        <div id="captura-status-display" class="status-display" style="display: none;">Captura para Entrenamiento: Inactiva</div>
-        <p id="message-area" class="info-message"></p>
-    </div>
-
-    <div class="container" id="training-capture-section" style="display: none;">
-        <h2>Captura para Muestra de Entrenamiento ML</h2>
-        <button id="toggleTrainingCaptureButton" class="btn-accion">Iniciar Captura de Segmento</button>
-        <div class="form-group">
-            <label for="pasRef">PAS Ref:</label>
-            <input type="number" id="pasRef" placeholder="Ej: 120">
-            <label for="padRef">PAD Ref:</label>
-            <input type="number" id="padRef" placeholder="Ej: 80">
-            <label for="hrRef">Pulso Ref:</label>
-            <input type="number" id="hrRef" placeholder="Ej: 75">
+        <div id="message-area" class="message-area"></div>
+        
+        <div class="training-controls" id="training-capture-section" style="display: none;">
+             <div id="captura-status-display" class="status-display">Captura Inactiva</div>
+             <button id="toggleTrainingCaptureButton">Iniciar Captura</button>
+             <div class="form-group">
+                <div>
+                    <label for="pasRef">PAS Ref:</label>
+                    <input type="number" id="pasRef" placeholder="120">
+                </div>
+                <div>
+                    <label for="padRef">PAD Ref:</label>
+                    <input type="number" id="padRef" placeholder="80">
+                </div>
+                <div>
+                    <label for="hrRef">Pulso Ref:</label>
+                    <input type="number" id="hrRef" placeholder="75">
+                </div>
+             </div>
+             <button id="saveTrainingSampleButton" disabled>Guardar Muestra de Entrenamiento</button>
+             <p style="font-size: 0.9em; color: var(--text-light);"><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición con el tensiómetro. 3. Detenga la captura. 4. Ingrese los 3 valores. 5. Guarde.</p>
         </div>
-        <button id="saveTrainingSampleButton" class="btn-guardar" disabled>Guardar Muestra de Entrenamiento</button>
-        <p><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición con el tensiómetro. 3. Detenga la captura. 4. Ingrese PAS, PAD y Pulso. 5. Guarde.</p>
     </div>
 
-    <div class="container data-section">
+    <div class="container">
         <h2>Última Estimación Recibida (Tiempo Real)</h2>
-        <p><strong>PAS (Sistólica):</strong> <span id="sysVal">---</span> mmHg</p>
-        <p><strong>PAD (Diastólica):</strong> <span id="diaVal">---</span> mmHg</p>
-        <p><strong>SpO2:</strong> <span id="spo2Val">---</span> %</p>
-        <p><strong>HR:</strong> <span id="hrVal">---</span> bpm</p>
-        <p><strong>Nivel:</strong> <span id="nivelVal">---</span></p>
-        <p><strong>Timestamp:</strong> <span id="timestampVal">---</span></p>
+        <div class="data-grid">
+            <div class="data-item"><Strong>PAS (Sistólica)</Strong> <span id="sysVal">---</span> mmHg</div>
+            <div class="data-item"><Strong>PAD (Diastólica)</Strong> <span id="diaVal">---</span> mmHg</div>
+            <div class="data-item"><Strong>SpO2</Strong> <span id="spo2Val">---</span> %</div>
+            <div class="data-item"><Strong>HR</Strong> <span id="hrVal">---</span> bpm</div>
+            <div class="data-item"><Strong>Nivel</Strong> <span id="nivelVal">---</span></div>
+            <div class="data-item"><Strong>Timestamp</Strong> <span id="timestampVal">---</span></div>
+        </div>
     </div>
 
     <div class="container">
         <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <p id="history-error-message" class="error-message"></p>
+        <p id="history-error-message" class="message-area error-message"></p>
         <table id="medicionesTable">
             <thead>
                 <tr>
-                    <th>ID DB</th>
+                    <th>ID</th>
                     <th>ID Paciente</th>
-                    <th>PAS (SYS)</th>
-                    <th>PAD (DIA)</th>
+                    <th>PAS</th>
+                    <th>PAD</th>
                     <th>Nivel</th>
                 </tr>
             </thead>
-            <tbody></tbody>
+            <tbody>
+                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
+            </tbody>
         </table>
     </div>
 
     <script>
+        // Variables de estado
         let estadoAutorizadoGeneral = false;
         let estadoCapturandoEntrenamiento = false;
 
         // Selectores de elementos del DOM
-        const authButton = document.getElementById('toggleAuthButton');
-        const authStatusDisplay = document.getElementById('auth-status-display');
-        const messageArea = document.getElementById('message-area');
-        const trainingCaptureSection = document.getElementById('training-capture-section');
-        const toggleTrainingCaptureButton = document.getElementById('toggleTrainingCaptureButton');
-        const saveTrainingSampleButton = document.getElementById('saveTrainingSampleButton');
-        const pasRefInput = document.getElementById('pasRef');
-        const padRefInput = document.getElementById('padRef');
-        const hrRefInput = document.getElementById('hrRef'); 
-        const capturaStatusDisplay = document.getElementById('captura-status-display');
-        
+        const ui = {
+            authButton: document.getElementById('toggleAuthButton'),
+            authStatus: document.getElementById('auth-status-display'),
+            messageArea: document.getElementById('message-area'),
+            trainingSection: document.getElementById('training-capture-section'),
+            toggleCaptureButton: document.getElementById('toggleTrainingCaptureButton'),
+            saveSampleButton: document.getElementById('saveTrainingSampleButton'),
+            pasRefInput: document.getElementById('pasRef'),
+            padRefInput: document.getElementById('padRef'),
+            hrRefInput: document.getElementById('hrRef'),
+            captureStatus: document.getElementById('captura-status-display'),
+            sysVal: document.getElementById('sysVal'),
+            diaVal: document.getElementById('diaVal'),
+            spo2Val: document.getElementById('spo2Val'),
+            hrVal: document.getElementById('hrVal'),
+            nivelVal: document.getElementById('nivelVal'),
+            timestampVal: document.getElementById('timestampVal'),
+            historyError: document.getElementById('history-error-message'),
+            medicionesTbody: document.getElementById('medicionesTable').getElementsByTagName('tbody')[0]
+        };
+
+        // --- Funciones de UI ---
+
         function mostrarMensaje(texto, tipo = 'info', duracion = 4000) {
-            messageArea.textContent = texto;
-            messageArea.className = tipo === 'error' ? 'error-message' : 'info-message';
-            messageArea.style.display = 'block';
-            setTimeout(() => messageArea.style.display = 'none', duracion);
+            ui.messageArea.textContent = texto;
+            ui.messageArea.className = `message-area message-${tipo}`;
+            ui.messageArea.style.display = 'block';
+            setTimeout(() => ui.messageArea.style.display = 'none', duracion);
         }
 
-        function actualizarEstadoGeneralUI() {
+        function actualizarUI() {
+            // Estado de autorización general
             if (estadoAutorizadoGeneral) {
-                authButton.textContent = 'Detener Registro General';
-                authButton.className = 'btn-detener';
-                authStatusDisplay.textContent = 'Modo General: Registro Autorizado';
-                authStatusDisplay.className = 'status-display status-autorizado';
-                trainingCaptureSection.style.display = 'block';
+                ui.authButton.textContent = 'Detener Registro General';
+                ui.authButton.className = 'btn-toggle-on';
+                ui.authStatus.textContent = 'Modo General: Registro Autorizado';
+                ui.authStatus.className = 'status-display status-autorizado';
+                ui.trainingSection.style.display = 'block';
             } else {
-                authButton.textContent = 'Autorizar Registro General';
-                authButton.className = 'btn-autorizar';
-                authStatusDisplay.textContent = 'Modo General: Registro Detenido';
-                authStatusDisplay.className = 'status-display status-detenido';
-                trainingCaptureSection.style.display = 'none';
-                if(estadoCapturandoEntrenamiento) { 
-                    fetch('/api/detener_captura_entrenamiento', { method: 'POST' });
-                    estadoCapturandoEntrenamiento = false; 
-                }
+                ui.authButton.textContent = 'Autorizar Registro General';
+                ui.authButton.className = 'btn-toggle-off';
+                ui.authStatus.textContent = 'Modo General: Registro Detenido';
+                ui.authStatus.className = 'status-display status-detenido';
+                ui.trainingSection.style.display = 'none';
             }
-            actualizarEstadoCapturaUI();
-        }
-        
-        function actualizarEstadoCapturaUI() {
+
+            // Estado de captura de entrenamiento
             if (estadoCapturandoEntrenamiento) {
-                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: ACTIVA (Recolectando datos...)';
-                capturaStatusDisplay.className = 'status-display status-capturando';
-                capturaStatusDisplay.style.display = 'block';
-                toggleTrainingCaptureButton.textContent = "Detener Captura";
-                toggleTrainingCaptureButton.className = 'btn-detener';
-                saveTrainingSampleButton.disabled = true; // Deshabilitar guardado mientras se captura
+                ui.captureStatus.textContent = 'Captura para Entrenamiento: ACTIVA (Recolectando datos...)';
+                ui.captureStatus.className = 'status-display status-capturando';
+                ui.toggleCaptureButton.textContent = "Detener Captura";
+                ui.toggleCaptureButton.className = 'btn-toggle-on';
+                ui.saveSampleButton.disabled = true;
             } else {
-                capturaStatusDisplay.textContent = 'Captura para Entrenamiento: Inactiva';
-                capturaStatusDisplay.className = 'status-display status-detenido';
-                toggleTrainingCaptureButton.textContent = "Iniciar Captura de Segmento";
-                toggleTrainingCaptureButton.className = 'btn-accion';
-                toggleTrainingCaptureButton.disabled = !estadoAutorizadoGeneral;
-                saveTrainingSampleButton.disabled = false; // Habilitar guardado cuando la captura está detenida
+                ui.captureStatus.textContent = 'Captura para Entrenamiento: Inactiva';
+                ui.captureStatus.className = 'status-display status-detenido';
+                ui.toggleCaptureButton.textContent = "Iniciar Captura de Segmento";
+                ui.toggleCaptureButton.className = 'btn-accion';
+                ui.toggleCaptureButton.disabled = !estadoAutorizadoGeneral;
+                ui.saveSampleButton.disabled = false;
             }
         }
 
-        // --- Event Listeners para los botones ---
+        // --- Lógica de Comunicación con la API ---
 
-        authButton.addEventListener('click', function() {
+        function toggleAutorizacion() {
             fetch('/api/autorizacion', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -193,32 +316,34 @@
             .then(data => {
                 if (data.autorizado !== undefined) {
                     estadoAutorizadoGeneral = data.autorizado;
-                    estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
-                    actualizarEstadoGeneralUI();
+                    if (!estadoAutorizadoGeneral && estadoCapturandoEntrenamiento) {
+                        estadoCapturandoEntrenamiento = false; // El backend también lo hace
+                    }
+                    actualizarUI();
                     mostrarMensaje(data.mensaje || `Estado general cambiado.`);
                 } else { mostrarMensaje('Error en respuesta del servidor.', 'error'); }
             })
-            .catch((error) => { console.error('Error:', error); mostrarMensaje('Error de red al cambiar autorización.', 'error'); });
-        });
+            .catch(error => { console.error('Error:', error); mostrarMensaje('Error de red al cambiar autorización.', 'error'); });
+        }
 
-        toggleTrainingCaptureButton.addEventListener('click', function() {
+        function toggleCapturaEntrenamiento() {
             const endpoint = estadoCapturandoEntrenamiento ? '/api/detener_captura_entrenamiento' : '/api/iniciar_captura_entrenamiento';
             fetch(endpoint, { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if(data.capturando !== undefined) {
                     estadoCapturandoEntrenamiento = data.capturando;
-                    actualizarEstadoCapturaUI();
+                    actualizarUI();
                     mostrarMensaje(data.mensaje || "Estado de captura cambiado.");
                 } else { mostrarMensaje(data.error || "Error al cambiar estado de captura.", "error");}
             })
             .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al cambiar captura.", "error");});
-        });
+        }
 
-        saveTrainingSampleButton.addEventListener('click', function() {
-            const pas = pasRefInput.value;
-            const pad = padRefInput.value;
-            const hr = hrRefInput.value; 
+        function guardarMuestraEntrenamiento() {
+            const pas = ui.pasRefInput.value;
+            const pad = ui.padRefInput.value;
+            const hr = ui.hrRefInput.value; 
 
             if (!pas || !pad || !hr) {
                 mostrarMensaje("Por favor, ingrese PAS, PAD y Pulso de referencia.", "error");
@@ -242,67 +367,80 @@
             .then(data => {
                 mostrarMensaje(data.mensaje || data.error || "Respuesta del servidor.", data.error ? 'error' : 'info');
                 if (!data.error) {
-                    pasRefInput.value = ''; padRefInput.value = ''; hrRefInput.value = ''; 
-                    actualizarEstadoCapturaUI();
+                    ui.pasRefInput.value = ''; ui.padRefInput.value = ''; ui.hrRefInput.value = ''; 
+                    estadoCapturandoEntrenamiento = false;
+                    actualizarUI();
                 }
             })
             .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al guardar muestra.", "error");});
-        });
-
-        // --- Funciones para obtener datos del servidor (sin cambios) ---
+        }
 
         function actualizarUltimaEstimacion() {
-            fetch('/api/ultima_estimacion').then(response => response.json()).then(data => {
-                document.getElementById('sysVal').textContent = data.sys || '---';
-                document.getElementById('diaVal').textContent = data.dia || '---';
-                document.getElementById('spo2Val').textContent = data.spo2 || '---';
-                document.getElementById('hrVal').textContent = data.hr || '---';
-                document.getElementById('nivelVal').textContent = data.nivel || '---';
-                document.getElementById('timestampVal').textContent = data.timestamp || '---';
-                if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
-                    estadoAutorizadoGeneral = data.modo_autorizado;
-                    actualizarEstadoGeneralUI();
-                }
-            }).catch(error => console.error('Error al actualizar última estimación:', error));
+            fetch('/api/ultima_estimacion')
+                .then(response => response.ok ? response.json() : Promise.reject('Respuesta no OK'))
+                .then(data => {
+                    ui.sysVal.textContent = data.sys || '---';
+                    ui.diaVal.textContent = data.dia || '---';
+                    ui.spo2Val.textContent = data.spo2 || '---';
+                    ui.hrVal.textContent = data.hr || '---';
+                    ui.nivelVal.textContent = data.nivel || '---';
+                    ui.timestampVal.textContent = data.timestamp || '---';
+                    
+                    if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
+                        estadoAutorizadoGeneral = data.modo_autorizado;
+                        actualizarUI();
+                    }
+                })
+                .catch(error => console.error('Error al actualizar última estimación:', error));
         }
 
         function actualizarTablaMediciones() {
-            const historyErrorMessage = document.getElementById('history-error-message');
-            historyErrorMessage.textContent = ''; historyErrorMessage.style.display = 'none';
-            fetch('/api/ultimas_mediciones').then(response => {
-                if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json();
-            }).then(data => {
-                const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                tbody.innerHTML = ''; 
-                if (data && data.length > 0) {
-                    data.forEach(medicion => {
-                        let row = tbody.insertRow();
-                        row.insertCell().textContent = medicion.id !== undefined ? medicion.id : 'N/A';
-                        row.insertCell().textContent = medicion.id_paciente !== undefined ? medicion.id_paciente : 'N/A';
-                        row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
-                        row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
-                        row.insertCell().textContent = medicion.nivel || 'N/A';
-                    });
-                } else {
-                    let row = tbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5; 
-                    cell.textContent = 'No hay mediciones guardadas.'; cell.style.textAlign = 'center';
-                }
-            }).catch(error => {
-                console.error('Error al actualizar tabla:', error);
-                historyErrorMessage.textContent = `Error al cargar historial: ${error.message}`;
-                historyErrorMessage.style.display = 'block';
-                const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
-                tbody.innerHTML = ''; let row = tbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5;
-                cell.textContent = 'Error al cargar historial.'; cell.style.textAlign = 'center';
-            });
+            ui.historyError.style.display = 'none';
+
+            fetch('/api/ultimas_mediciones')
+                .then(response => {
+                    if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json();
+                })
+                .then(data => {
+                    ui.medicionesTbody.innerHTML = ''; 
+                    if (data && Array.isArray(data) && data.length > 0) {
+                        data.forEach(medicion => {
+                            let row = ui.medicionesTbody.insertRow();
+                            row.insertCell().textContent = medicion.id ?? 'N/A';
+                            row.insertCell().textContent = medicion.id_paciente ?? 'N/A';
+                            row.insertCell().textContent = medicion.sys ?? 'N/A';
+                            row.insertCell().textContent = medicion.dia ?? 'N/A';
+                            row.insertCell().textContent = medicion.nivel || 'N/A';
+                        });
+                    } else {
+                        let row = ui.medicionesTbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5; 
+                        cell.textContent = 'No hay mediciones guardadas para mostrar.'; cell.style.textAlign = 'center';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error al actualizar tabla:', error);
+                    ui.historyError.textContent = `Error al cargar historial: ${error.message}`;
+                    ui.historyError.style.display = 'block';
+                });
         }
 
+        // --- Inicialización ---
         document.addEventListener('DOMContentLoaded', function() {
-            fetch('/api/autorizacion').then(response => response.json()).then(data => {
-                if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
-                if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
-                actualizarEstadoGeneralUI();
-            }).catch(error => console.error('Error al obtener estado inicial:', error));
+            ui.authButton.addEventListener('click', toggleAutorizacion);
+            ui.toggleCaptureButton.addEventListener('click', toggleCapturaEntrenamiento);
+            ui.saveSampleButton.addEventListener('click', guardarMuestraEntrenamiento);
+
+            fetch('/api/autorizacion')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
+                    if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
+                    actualizarUI();
+                })
+                .catch(error => {
+                    console.error('Error al obtener estado inicial:', error)
+                    mostrarMensaje('No se pudo cargar el estado inicial del servidor.', 'error');
+                });
             
             actualizarUltimaEstimacion(); 
             actualizarTablaMediciones(); 
@@ -316,16 +454,33 @@
 </html>
 ```
 
-**Resumen de Cambios Clave en `index.html`:**
+**Cambios y Mejoras Clave:**
 
-1.  **Sin Límite de Tiempo:** Se eliminó por completo el conteo regresivo de 25 segundos.
-2.  **Botón de Captura Toggle:** El botón "Iniciar Captura de Segmento" ahora cambia su texto a "Detener Captura" y llama a diferentes endpoints (`/api/iniciar_captura_entrenamiento` y `/api/detener_captura_entrenamiento`) para darte control manual sobre la duración de la captura.
-3.  **Nuevo Campo de Entrada:** Se añadió el campo `hrRef` para que puedas ingresar el "Pulso de Referencia".
-4.  **Lógica de Guardado Actualizada:** El botón "Guardar Muestra de Entrenamiento" ahora recopila los tres valores (PAS, PAD y el nuevo HR de referencia) y los envía al servidor.
-5.  **Flujo de Trabajo Mejorado:** La interfaz ahora te guía mejor:
-    * Primero, inicias la captura.
-    * Mientras capturas, tomas la medición con el tensiómetro.
-    * Luego, detienes la captura.
-    * Finalmente, ingresas los tres valores de referencia y guardas la muestra.
+1.  **Diseño (CSS):**
+    * Se ha rediseñado completamente con un estilo más limpio y profesional.
+    * Usa variables CSS (`:root`) para facilitar cambios de color globales.
+    * Las secciones están organizadas en "tarjetas" con sombras para una mejor separación visual.
+    * La sección "Última Estimación" ahora usa una cuadrícula (`data-grid`) para presentar los datos de forma más compacta y legible.
+    * Se han mejorado los estilos de los botones y los mensajes de error/información.
 
-Ahora, con este `index.html` y el `app.py` que te di anteriormente, tienes el sistema completo para recolectar datos de alta calidad para tu modelo de Machine Learni
+2.  **Sección de Captura de Entrenamiento (HTML):**
+    * **Ya no está en la parte inferior.** Se ha colocado en un panel de control dedicado.
+    * Los campos de entrada para **PAS Ref, PAD Ref, y el nuevo Pulso Ref** están ahora agrupados de forma lógica.
+    * El botón para iniciar/detener la captura es más claro.
+
+3.  **Funcionalidad (JavaScript):**
+    * **El código JS ha sido revisado** para asegurar que los selectores de elementos (`getElementById`) coincidan con los IDs en el nuevo HTML.
+    * **Se ha añadido manejo de errores** para las peticiones `fetch`, de modo que si hay un problema al cargar los datos, se mostrará un mensaje de error en la página.
+    * La lógica para actualizar la UI (`actualizarUI`) se ha centralizado para que todos los cambios de estado (autorización general y estado de captura) se reflejen consistentemente en la interfaz.
+    * **Se mantiene la actualización automática** mediante `setInterval` para que no necesites los botones de "Actualizar".
+
+**Próximos Pasos para Ti:**
+
+1.  Reemplaza tu `templates/index.html` con este nuevo código.
+2.  Despliega los cambios en Render.
+3.  Abre la página web y verifica que:
+    * El nuevo diseño te guste más.
+    * La "Última Estimación" y la tabla de "Últimas 20 Mediciones" se carguen y actualicen automáticamente.
+    * La nueva sección de captura de entrenamiento funcione como se espera.
+
+Espero que esta nueva versión resuelva los problemas que tenías y te guste más el dise
