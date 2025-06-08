@@ -11,6 +11,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from scipy.signal import butter, filtfilt
 
+# Importar la librería de Twilio
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+
 app = Flask(__name__)
 
 # --- Carga de Modelos de Machine Learning ---
@@ -21,7 +25,7 @@ modelo_dia = None
 try:
     if os.path.exists(MODEL_SYS_PATH): modelo_sys = joblib.load(MODEL_SYS_PATH)
     if os.path.exists(MODEL_DIA_PATH): modelo_dia = joblib.load(MODEL_DIA_PATH)
-    if modelo_sys and modelo_dia: print("✅ Modelos de ML cargados.")
+    if modelo_sys and modelo_dia: print("✅ Modelos de ML cargados exitosamente.")
     else: print("⚠️ Advertencia: Uno o ambos modelos de ML no se encontraron.")
 except Exception as e: print(f"❌ Error al cargar modelos: {e}")
 
@@ -50,7 +54,39 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") 
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" 
 
-# --- Funciones Auxiliares ---
+# --- Configuración de Twilio (desde variables de entorno) ---
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+TWILIO_WHATSAPP_NUMBER = os.environ.get('TWILIO_WHATSAPP_NUMBER') # ej: whatsapp:+158*********
+RECIPIENT_WHATSAPP_NUMBER = os.environ.get('RECIPIENT_WHATSAPP_NUMBER') # ej: whatsapp:+593*********
+
+# --- Funciones ---
+
+def send_whatsapp_alert(message_body):
+    """Envía una alerta por WhatsApp usando Twilio."""
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, RECIPIENT_WHATSAPP_NUMBER]):
+        print("⚠️ Advertencia Twilio: Faltan variables de entorno. No se puede enviar WhatsApp.")
+        return False
+    
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message = client.messages.create(
+                              from_=TWILIO_WHATSAPP_NUMBER,
+                              body=message_body,
+                              to=RECIPIENT_WHATSAPP_NUMBER
+                          )
+        print(f"✅ Alerta de WhatsApp enviada con SID: {message.sid}")
+        return True
+    except TwilioRestException as e:
+        print(f"❌ Error al enviar WhatsApp con Twilio: {e}")
+        return False
+
+def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
+    try:
+        nyquist = 0.5 * fs; low = lowcut / nyquist; high = highcut / nyquist
+        b, a = butter(order, [low, high], btype='band'); return filtfilt(b, a, senal)
+    except Exception: return np.array(senal)
+
 def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_promedio):
     ir_filtrado = filtrar_senal_ppg(segmento_ir)
     red_filtrado = filtrar_senal_ppg(segmento_red)
@@ -64,26 +100,65 @@ def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_pro
     }
     return caracteristicas
 
-def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
-    try:
-        nyquist = 0.5 * fs; low = lowcut / nyquist; high = highcut / nyquist
-        b, a = butter(order, [low, high], btype='band'); return filtfilt(b, a, senal)
-    except Exception: return np.array(senal)
-
 def clasificar_nivel_presion(pas_valor, pad_valor):
-    if pas_valor is None or pd.isna(pas_valor): return "---"
+    if pas_valor is None or pd.isna(pas_valor) or pas_valor == -1: return "---"
     if pas_valor > 180 or pad_valor > 120: return "HT Crisis"
     elif pas_valor >= 140 or pad_valor >= 90: return "HT2"        
     elif (pas_valor >= 130 and pas_valor <= 139) or (pad_valor >= 80 and pad_valor <= 89): return "HT1"        
     elif (pas_valor >= 120 and pas_valor <= 129) and pad_valor < 80: return "Elevada"
     elif pas_valor < 120 and pad_valor < 80: return "Normal"
-    else: return "Revisar" 
+    else: 
+        if pad_valor >= 80: 
+             if pad_valor >= 90: return "HT2"
+             else: return "HT1" 
+        return "Revisar" 
 
-# Las demás funciones (conectar_db, guardar_medicion_mysql, get_google_drive_service, subir_archivo_a_drive)
-# y los demás endpoints (/ultimas_mediciones, /autorizacion, etc.) se mantienen como en la versión anterior.
-# Lo importante es el cambio en /api/presion.
-# ... (incluir todas las demás funciones y endpoints aquí) ...
-# Por brevedad, me centraré en el endpoint modificado que es la clave.
+def conectar_db():
+    if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]): print("Error: Configuración DB incompleta."); return None
+    try: conn = mysql.connector.connect(**DB_CONFIG); return conn
+    except mysql.connector.Error as err: print(f"❌ Error conexión MySQL: {err}"); return None
+
+def guardar_medicion_mysql(id_paciente, sys, dia, nivel):
+    conn = conectar_db(); 
+    if conn is None: return False
+    cursor = conn.cursor()
+    query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
+    try:
+        cursor.execute(query, (id_paciente, sys, dia, nivel)); conn.commit()
+        return True
+    except mysql.connector.Error as err: print(f"❌ Error MySQL: {err}"); conn.rollback(); return False
+    finally:
+        if conn.is_connected(): cursor.close(); conn.close()
+
+def get_google_drive_service():
+    effective_key_file_location = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', KEY_FILE_LOCATION_FALLBACK)
+    if not os.path.exists(effective_key_file_location): print(f"⚠️ Drive: '{effective_key_file_location}' no encontrado."); return None
+    try:
+        creds = service_account.Credentials.from_service_account_file(effective_key_file_location, scopes=SCOPES)
+        service = build('drive', 'v3', credentials=creds); return service
+    except Exception as e: print(f"❌ Drive: Error autenticando: {e}"); return None
+
+def subir_archivo_a_drive(file_path, file_name_on_drive):
+    if not FOLDER_ID or FOLDER_ID == "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-":
+        print("Error Drive: FOLDER_ID no configurado."); return False
+    service = get_google_drive_service();
+    if not service: return False
+    try:
+        file_metadata = {'name': file_name_on_drive, 'parents': [FOLDER_ID]}
+        media = MediaFileUpload(file_path, mimetype='text/csv', resumable=True)
+        query = f"name='{file_name_on_drive}' and '{FOLDER_ID}' in parents and trashed=false"
+        response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        existing_files = response.get('files', [])
+        if existing_files: 
+            file_id = existing_files[0].get('id')
+            service.files().update(fileId=file_id, media_body=media).execute()
+        else: 
+            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        print(f"Drive: Archivo '{file_name_on_drive}' actualizado/subido.")
+        return True
+    except Exception as e: print(f"❌ Drive: Error al subir: {e}"); return False
+
+# --- Endpoints Flask ---
 
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
@@ -100,12 +175,11 @@ def api_procesar_presion():
         if capturando_entrenamiento:
             buffer_datos_entrenamiento.append({"hr": hr, "ir": ir_val, "red": red_val, "timestamp": datetime.now()})
 
-        # --- LÓGICA DE CÁLCULO RESTAURADA A TU VERSIÓN ORIGINAL ---
+        # Restaurada la lógica de tu código origen para SpO2 y predicción
         ventana_ir.append(ir_val)
         ventana_red.append(red_val)
         if len(ventana_ir) > MUESTRAS: ventana_ir.pop(0)
         if len(ventana_red) > MUESTRAS: ventana_red.pop(0)
-
         spo2_estimada = 0.0 
         if len(ventana_ir) == MUESTRAS:
             try:
@@ -113,14 +187,12 @@ def api_procesar_presion():
                 dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
                 ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir)) 
                 ac_red = np.mean(np.abs(np_ventana_red - dc_red))
-                if dc_ir > 0 and dc_red > 0: # Chequeo original
+                if dc_ir > 0 and dc_red > 0: 
                     ratio = (ac_red / dc_red) / (ac_ir / dc_ir) if ac_ir > 0 and ac_red > 0 else 0
                     spo2_calc = 110 - 25 * ratio
                     spo2_estimada = max(70.0, min(100.0, spo2_calc))
-            except Exception as e_spo2: 
-                print(f"Error en cálculo SpO2: {e_spo2}"); spo2_estimada = 0.0
-
-        # Predecir SIEMPRE, como en tu código original, incluso si spo2 es 0
+            except Exception as e_spo2: print(f"Error en cálculo SpO2: {e_spo2}"); spo2_estimada = 0.0
+        
         entrada_df = pd.DataFrame([[float(hr), float(spo2_estimada)]], columns=['hr', 'spo2'])
         sys_estimada = round(modelo_sys.predict(entrada_df)[0], 2)
         dia_estimada = round(modelo_dia.predict(entrada_df)[0], 2)
@@ -133,18 +205,22 @@ def api_procesar_presion():
             "modo_autorizado": autorizado, "capturando_entrenamiento": capturando_entrenamiento
         }
 
-        # Guardado en CSV para Google Drive (solo si autorizado)
-        if autorizado:
-            # ... (Lógica de guardado del CSV cuando se implemente el guardado de muestra) ...
-            # Por ahora, esta parte se manejará con el endpoint /api/guardar_muestra_entrenamiento
-            pass
-
-        # Lógica de guardado en Railway (tu lógica original)
+        # --- LLAMADA A LA FUNCIÓN DE ALERTA DE WHATSAPP ---
+        if nivel_presion == "HT Crisis":
+            print("🚨 Detectada Crisis Hipertensiva, intentando enviar alerta por WhatsApp...")
+            mensaje_alerta = (f"¡ALERTA MÉDICA URGENTE! 🚑\n\n"
+                              f"El dispositivo del paciente ID {id_paciente_in} ha registrado una posible **Crisis Hipertensiva**.\n\n"
+                              f"Valores Estimados:\n"
+                              f"  - *Presión Sistólica (PAS):* {sys_estimada} mmHg\n"
+                              f"  - *Presión Diastólica (PAD):* {dia_estimada} mmHg\n\n"
+                              f"Timestamp: {ultima_estimacion['timestamp']} (UTC).\n\n"
+                              f"**Se recomienda verificar el estado del paciente inmediatamente.**")
+            send_whatsapp_alert(mensaje_alerta)
+        # --- FIN LLAMADA ---
+        
         if ir_val > 20000 and red_val > 15000: 
             guardar_medicion_mysql(id_paciente_in, sys_estimada, dia_estimada, nivel_presion)
-        else: 
-            print("DEBUG: Condición para guardar en DB no cumplida (según umbrales IR/RED origen).")
-
+        
         return jsonify({
             "sys": sys_estimada, "dia": dia_estimada, 
             "spo2": spo2_estimada, "nivel": nivel_presion
@@ -152,369 +228,9 @@ def api_procesar_presion():
     except Exception as e: 
         print(f"❌ Error en /api/presion: {e}"); import traceback; traceback.print_exc()
         return jsonify({"error": "Error interno", "detalle": str(e)}), 500
-        
-# AÑADE AQUÍ EL RESTO DE TUS ENDPOINTS:
-# /
-# /api/ultimas_mediciones
-# /api/autorizacion
-# /api/iniciar_captura_entrenamiento
-# /api/detener_captura_entrenamiento
-# /api/guardar_muestra_entrenamiento
 
-# Y TAMBIÉN EL BLOQUE if __name__ == "__main__":
-# if __name__ == "__main__":
-#     port = int(os.environ.get("PORT", 10000)) 
-#     app.run(host='0.0.0.0', port=port, debug=True)
-
+# El resto de tus endpoints (/ , /iniciar_captura..., /detener_captura..., /guardar_muestra..., /ultimas_mediciones, /autorizacion, /ultima_estimacion)
+# y el bloque if __name__ == "__main__": se mantendrían como en la versión anterior (app_py_ml_flexible_capture_final)
+# ya que no cambian para esta funcionalidad.
 ```
-
-*He dejado placeholders para el resto de funciones y endpoints para centrarme en la corrección del endpoint `/api/presion`. Deberías copiar esta función `api_procesar_presion` y reemplazar la que tienes en tu archivo `app.py` completo.*
-
-### **Paso 2: Código `index.html` Actualizado y SIN Valores Crudos**
-
-Este es el `index.html` con el diseño mejorado y la lógica de captura flexible que pediste, pero **sin mostrar los valores crudos de IR y RED**, y con el campo para el pulso de referencia.
-
-
-```html
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Control - Monitor de PA</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-        :root {
-            --primary-color: #3f51b5; --secondary-color: #f50057; --success-color: #4CAF50;
-            --warning-color: #ff9800; --light-bg: #f4f7f6; --card-bg: #ffffff;
-            --text-color: #333; --text-light: #666; --border-color: #e0e0e0;
-            --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-        }
-        body {
-            font-family: 'Roboto', sans-serif; margin: 0; padding: 20px;
-            background-color: var(--light-bg); color: var(--text-color);
-            display: flex; flex-direction: column; align-items: center; gap: 20px;
-        }
-        .main-title { font-size: 2.5em; color: var(--primary-color); font-weight: 700; }
-        .container {
-            background-color: var(--card-bg); padding: 25px; border-radius: 12px;
-            box-shadow: var(--shadow); width: 95%; max-width: 800px; text-align: center;
-        }
-        h2 {
-            font-size: 1.5em; color: var(--primary-color); margin-top: 0;
-            padding-bottom: 10px; border-bottom: 2px solid var(--border-color);
-        }
-        .status-display {
-            margin: 15px auto; padding: 12px; border-radius: 8px; font-weight: 500;
-            color: white; font-size: 1.1em; max-width: 400px;
-        }
-        .status-autorizado { background-color: var(--success-color); }
-        .status-detenido { background-color: var(--secondary-color); }
-        .status-capturando { background-color: var(--warning-color); }
-        .data-grid {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px; text-align: left; margin-top: 20px;
-        }
-        .data-item {
-            background: var(--light-bg); padding: 15px; border-radius: 8px;
-            border-left: 5px solid var(--primary-color);
-        }
-        .data-item strong { display: block; color: var(--text-light); margin-bottom: 5px; font-size: 0.9em; text-transform: uppercase; }
-        .data-item span { font-size: 1.6em; font-weight: 700; color: var(--primary-color); }
-        #nivelVal { font-weight: 700; }
-        button {
-            padding: 12px 24px; font-size: 1em; font-weight: 500; color: white;
-            border: none; border-radius: 8px; cursor: pointer;
-            transition: background-color 0.3s, transform 0.1s; margin: 10px 5px;
-        }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        button:active:not(:disabled) { transform: scale(0.97); }
-        .btn-toggle-off { background-color: var(--success-color); }
-        .btn-toggle-on { background-color: var(--secondary-color); }
-        .btn-accion { background-color: #2196F3; }
-        .btn-guardar { background-color: #FFC107; color: #333;}
-        .form-group {
-            margin: 20px 0; display: flex; flex-wrap: wrap; justify-content: center;
-            align-items: center; gap: 15px;
-        }
-        .form-group label { font-weight: 500; }
-        input[type="number"] {
-            padding: 10px; border: 1px solid var(--border-color); border-radius: 6px;
-            width: 80px; font-size: 1.1em; text-align: center;
-        }
-        table { width: 100%; margin-top: 15px; border-collapse: collapse; }
-        th, td { border: 1px solid var(--border-color); padding: 12px; text-align: left; }
-        th { background-color: var(--primary-color); color: white; font-weight: 500; }
-        tr:nth-child(even) { background-color: var(--light-bg); }
-        .message-area { font-weight: 500; margin-top: 15px; padding: 10px; border-radius: 6px; display: none; }
-        .message-error { color: #721c24; background-color: #f8d7da; }
-        .message-info { color: #155724; background-color: #d4edda; }
-    </style>
-</head>
-<body>
-
-    <h1 class="main-title">Panel de Control del Monitor de PA</h1>
-
-    <div class="container">
-        <h2>Estado y Controles</h2>
-        <div id="auth-status-display" class="status-display">Cargando...</div>
-        <button id="toggleAuthButton">Cargando...</button>
-        <p id="message-area" class="message-area"></p>
-        
-        <div class="training-controls" id="training-capture-section" style="display: none;">
-             <h2>Captura para Muestra de Entrenamiento ML</h2>
-             <div id="captura-status-display" class="status-display">Captura Inactiva</div>
-             <button id="toggleTrainingCaptureButton">Iniciar Captura</button>
-             <div class="form-group">
-                <div>
-                    <label for="pasRef">PAS Ref:</label>
-                    <input type="number" id="pasRef" placeholder="120">
-                </div>
-                <div>
-                    <label for="padRef">PAD Ref:</label>
-                    <input type="number" id="padRef" placeholder="80">
-                </div>
-                <div>
-                    <label for="hrRef">Pulso Ref:</label>
-                    <input type="number" id="hrRef" placeholder="75">
-                </div>
-             </div>
-             <button id="saveTrainingSampleButton" disabled>Guardar Muestra de Entrenamiento</button>
-             <p style="font-size: 0.9em; color: var(--text-light);"><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición. 3. Detenga la captura. 4. Ingrese los 3 valores de referencia. 5. Guarde.</p>
-        </div>
-    </div>
-
-    <div class="container">
-        <h2>Última Estimación Recibida (Tiempo Real)</h2>
-        <div class="data-grid">
-            <div class="data-item"><Strong>PAS (Sistólica)</Strong> <span id="sysVal">---</span> mmHg</div>
-            <div class="data-item"><Strong>PAD (Diastólica)</Strong> <span id="diaVal">---</span> mmHg</div>
-            <div class="data-item"><Strong>SpO2</Strong> <span id="spo2Val">---</span> %</div>
-            <div class="data-item"><Strong>HR</Strong> <span id="hrVal">---</span> bpm</div>
-            <div class="data-item"><Strong>Nivel</Strong> <span id="nivelVal">---</span></div>
-            <div class="data-item"><Strong>Timestamp (UTC)</Strong> <span id="timestampVal">---</span></div>
-        </div>
-    </div>
-
-    <div class="container">
-        <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <p id="history-error-message" class="message-area error-message"></p>
-        <table id="medicionesTable">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>ID Paciente</th>
-                    <th>PAS</th>
-                    <th>PAD</th>
-                    <th>Nivel</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <script>
-        let estadoAutorizadoGeneral = false;
-        let estadoCapturandoEntrenamiento = false;
-
-        const ui = {
-            authButton: document.getElementById('toggleAuthButton'),
-            authStatus: document.getElementById('auth-status-display'),
-            messageArea: document.getElementById('message-area'),
-            trainingSection: document.getElementById('training-capture-section'),
-            toggleCaptureButton: document.getElementById('toggleTrainingCaptureButton'),
-            saveSampleButton: document.getElementById('saveTrainingSampleButton'),
-            pasRefInput: document.getElementById('pasRef'),
-            padRefInput: document.getElementById('padRef'),
-            hrRefInput: document.getElementById('hrRef'), 
-            captureStatus: document.getElementById('captura-status-display'),
-            sysVal: document.getElementById('sysVal'),
-            diaVal: document.getElementById('diaVal'),
-            spo2Val: document.getElementById('spo2Val'),
-            hrVal: document.getElementById('hrVal'),
-            nivelVal: document.getElementById('nivelVal'),
-            timestampVal: document.getElementById('timestampVal'),
-            historyError: document.getElementById('history-error-message'),
-            medicionesTbody: document.getElementById('medicionesTable').getElementsByTagName('tbody')[0]
-        };
-
-        function mostrarMensaje(texto, tipo = 'info', duracion = 4000) {
-            ui.messageArea.textContent = texto;
-            ui.messageArea.className = `message-area message-${tipo}`;
-            ui.messageArea.style.display = 'block';
-            setTimeout(() => ui.messageArea.style.display = 'none', duracion);
-        }
-
-        function actualizarUI() {
-            if (estadoAutorizadoGeneral) {
-                ui.authButton.textContent = 'Detener Registro General';
-                ui.authButton.className = 'btn-toggle-on';
-                ui.authStatus.textContent = 'Modo General: Registro Autorizado';
-                ui.authStatus.className = 'status-display status-autorizado';
-                ui.trainingSection.style.display = 'block';
-            } else {
-                ui.authButton.textContent = 'Autorizar Registro General';
-                ui.authButton.className = 'btn-toggle-off';
-                ui.authStatus.textContent = 'Modo General: Registro Detenido';
-                ui.authStatus.className = 'status-display status-detenido';
-                ui.trainingSection.style.display = 'none';
-            }
-
-            if (estadoCapturandoEntrenamiento) {
-                ui.captureStatus.textContent = 'Captura para Entrenamiento: ACTIVA';
-                ui.captureStatus.className = 'status-display status-capturando';
-                ui.toggleCaptureButton.textContent = "Detener Captura";
-                ui.toggleCaptureButton.className = 'btn-toggle-on';
-                ui.saveSampleButton.disabled = true;
-            } else {
-                ui.captureStatus.textContent = 'Captura para Entrenamiento: Inactiva';
-                ui.captureStatus.className = 'status-display status-detenido';
-                ui.toggleCaptureButton.textContent = "Iniciar Captura de Segmento";
-                ui.toggleCaptureButton.className = 'btn-accion';
-                ui.toggleCaptureButton.disabled = !estadoAutorizadoGeneral;
-                ui.saveSampleButton.disabled = false;
-            }
-        }
-
-        function toggleAutorizacion() {
-            fetch('/api/autorizacion', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ autorizado: !estadoAutorizadoGeneral }),
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.autorizado !== undefined) {
-                    estadoAutorizadoGeneral = data.autorizado;
-                    if (!estadoAutorizadoGeneral && estadoCapturandoEntrenamiento) {
-                        fetch('/api/detener_captura_entrenamiento', { method: 'POST' });
-                        estadoCapturandoEntrenamiento = false;
-                    }
-                    actualizarUI();
-                    mostrarMensaje(data.mensaje || `Estado general cambiado.`);
-                } else { mostrarMensaje('Error en respuesta del servidor.', 'error'); }
-            })
-            .catch((error) => { console.error('Error:', error); mostrarMensaje('Error de red.', 'error'); });
-        }
-
-        function toggleCapturaEntrenamiento() {
-            const endpoint = estadoCapturandoEntrenamiento ? '/api/detener_captura_entrenamiento' : '/api/iniciar_captura_entrenamiento';
-            fetch(endpoint, { method: 'POST' })
-            .then(response => response.json())
-            .then(data => {
-                if(data.capturando !== undefined) {
-                    estadoCapturandoEntrenamiento = data.capturando;
-                    actualizarUI();
-                    mostrarMensaje(data.mensaje || "Estado de captura cambiado.");
-                } else { mostrarMensaje(data.error || "Error al cambiar estado.", "error");}
-            })
-            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red.", "error");});
-        }
-
-        function guardarMuestraEntrenamiento() {
-            const pas = ui.pasRefInput.value;
-            const pad = ui.padRefInput.value;
-            const hr = ui.hrRefInput.value; 
-
-            if (!pas || !pad || !hr) {
-                mostrarMensaje("Por favor, ingrese PAS, PAD y Pulso de referencia.", "error"); return;
-            }
-            if (estadoCapturandoEntrenamiento) {
-                mostrarMensaje("Por favor, primero detenga la captura antes de guardar.", "error"); return;
-            }
-
-            fetch('/api/guardar_muestra_entrenamiento', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    pas_referencia: parseFloat(pas), 
-                    pad_referencia: parseFloat(pad),
-                    hr_referencia: parseFloat(hr) 
-                }),
-            })
-            .then(response => response.json())
-            .then(data => {
-                mostrarMensaje(data.mensaje || data.error, data.error ? 'error' : 'info');
-                if (!data.error) {
-                    ui.pasRefInput.value = ''; ui.padRefInput.value = ''; ui.hrRefInput.value = ''; 
-                    actualizarUI();
-                }
-            })
-            .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al guardar.", "error");});
-        }
-
-        function actualizarUltimaEstimacion() {
-            fetch('/api/ultima_estimacion').then(response => response.ok ? response.json() : Promise.reject('Respuesta no OK'))
-            .then(data => {
-                ui.sysVal.textContent = data.sys || '---';
-                ui.diaVal.textContent = data.dia || '---';
-                ui.spo2Val.textContent = data.spo2 || '---';
-                ui.hrVal.textContent = data.hr || '---';
-                ui.nivelVal.textContent = data.nivel || '---';
-                ui.timestampVal.textContent = data.timestamp || '---';
-                if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
-                    estadoAutorizadoGeneral = data.modo_autorizado;
-                    actualizarUI();
-                }
-                if (data.capturando_entrenamiento !== undefined && data.capturando_entrenamiento !== estadoCapturandoEntrenamiento) {
-                    estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
-                    actualizarUI();
-                }
-            }).catch(error => console.error('Error al actualizar última estimación:', error));
-        }
-
-        function actualizarTablaMediciones() {
-            ui.historyError.style.display = 'none';
-            fetch('/api/ultimas_mediciones').then(response => {
-                if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json();
-            }).then(data => {
-                ui.medicionesTbody.innerHTML = ''; 
-                if (data && Array.isArray(data) && data.length > 0) {
-                    data.forEach(medicion => {
-                        let row = ui.medicionesTbody.insertRow();
-                        row.insertCell().textContent = medicion.id ?? 'N/A';
-                        row.insertCell().textContent = medicion.id_paciente ?? 'N/A';
-                        row.insertCell().textContent = medicion.sys ?? 'N/A';
-                        row.insertCell().textContent = medicion.dia ?? 'N/A';
-                        row.insertCell().textContent = medicion.nivel || 'N/A';
-                    });
-                } else {
-                    let row = ui.medicionesTbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5; 
-                    cell.textContent = 'No hay mediciones guardadas.'; cell.style.textAlign = 'center';
-                }
-            }).catch(error => {
-                console.error('Error al actualizar tabla:', error);
-                ui.historyError.textContent = `Error al cargar historial: ${error.message}`;
-                ui.historyError.style.display = 'block';
-            });
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            ui.authButton.addEventListener('click', toggleAutorizacion);
-            ui.toggleCaptureButton.addEventListener('click', toggleCapturaEntrenamiento);
-            ui.saveSampleButton.addEventListener('click', guardarMuestraEntrenamiento);
-
-            fetch('/api/autorizacion')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
-                    if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
-                    actualizarUI();
-                })
-                .catch(error => {
-                    console.error('Error al obtener estado inicial:', error)
-                    mostrarMensaje('No se pudo cargar el estado inicial del servidor.', 'error');
-                });
-            
-            actualizarUltimaEstimacion(); 
-            actualizarTablaMediciones(); 
-
-            setInterval(actualizarUltimaEstimacion, 5000); 
-            setInterval(actualizarTablaMediciones, 30000); 
-        });
-    </script>
-
-</body>
-</html>
+*Nota: Para mantener la respuesta enfocada, he omitido las funciones y endpoints que no cambian. Debes **añadir la nueva función `send_whatsapp_alert` y la nueva lógica de llamada a esta función dentro de `/api/presion` a tu archivo `app.py` completo** que ya tienes, junto con las variables de configuración de Twilio al principio del scrip
