@@ -77,10 +77,9 @@
         <p id="message-area" class="info-message"></p>
     </div>
 
-    <!-- Sección para Captura de Datos de Entrenamiento -->
     <div class="container" id="training-capture-section" style="display: none;">
         <h2>Captura para Muestra de Entrenamiento ML</h2>
-        <button id="startTrainingCaptureButton" class="btn-accion">Iniciar Captura de Segmento</button>
+        <button id="toggleTrainingCaptureButton" class="btn-accion">Iniciar Captura de Segmento</button>
         <div class="form-group">
             <label for="pasRef">PAS Ref:</label>
             <input type="number" id="pasRef" placeholder="Ej: 120">
@@ -90,7 +89,7 @@
             <input type="number" id="hrRef" placeholder="Ej: 75">
         </div>
         <button id="saveTrainingSampleButton" class="btn-guardar" disabled>Guardar Muestra de Entrenamiento</button>
-        <p><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición con el tensiómetro de referencia. 3. Ingrese los valores PAS, PAD y Pulso. 4. Guarde la muestra.</p>
+        <p><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición con el tensiómetro. 3. Detenga la captura. 4. Ingrese PAS, PAD y Pulso. 5. Guarde.</p>
     </div>
 
     <div class="container data-section">
@@ -129,13 +128,13 @@
         const authStatusDisplay = document.getElementById('auth-status-display');
         const messageArea = document.getElementById('message-area');
         const trainingCaptureSection = document.getElementById('training-capture-section');
-        const startTrainingCaptureButton = document.getElementById('startTrainingCaptureButton');
+        const toggleTrainingCaptureButton = document.getElementById('toggleTrainingCaptureButton');
         const saveTrainingSampleButton = document.getElementById('saveTrainingSampleButton');
         const pasRefInput = document.getElementById('pasRef');
         const padRefInput = document.getElementById('padRef');
-        const hrRefInput = document.getElementById('hrRef'); // Nuevo input para HR de referencia
+        const hrRefInput = document.getElementById('hrRef'); 
         const capturaStatusDisplay = document.getElementById('captura-status-display');
-
+        
         function mostrarMensaje(texto, tipo = 'info', duracion = 4000) {
             messageArea.textContent = texto;
             messageArea.className = tipo === 'error' ? 'error-message' : 'info-message';
@@ -156,7 +155,8 @@
                 authStatusDisplay.textContent = 'Modo General: Registro Detenido';
                 authStatusDisplay.className = 'status-display status-detenido';
                 trainingCaptureSection.style.display = 'none';
-                if(estadoCapturandoEntrenamiento) {
+                if(estadoCapturandoEntrenamiento) { 
+                    fetch('/api/detener_captura_entrenamiento', { method: 'POST' });
                     estadoCapturandoEntrenamiento = false; 
                 }
             }
@@ -168,16 +168,16 @@
                 capturaStatusDisplay.textContent = 'Captura para Entrenamiento: ACTIVA (Recolectando datos...)';
                 capturaStatusDisplay.className = 'status-display status-capturando';
                 capturaStatusDisplay.style.display = 'block';
-                startTrainingCaptureButton.textContent = "Detener Captura";
-                startTrainingCaptureButton.className = 'btn-detener';
-                saveTrainingSampleButton.disabled = false;
+                toggleTrainingCaptureButton.textContent = "Detener Captura";
+                toggleTrainingCaptureButton.className = 'btn-detener';
+                saveTrainingSampleButton.disabled = true; // Deshabilitar guardado mientras se captura
             } else {
                 capturaStatusDisplay.textContent = 'Captura para Entrenamiento: Inactiva';
                 capturaStatusDisplay.className = 'status-display status-detenido';
-                startTrainingCaptureButton.textContent = "Iniciar Captura de Segmento";
-                startTrainingCaptureButton.className = 'btn-accion';
-                startTrainingCaptureButton.disabled = !estadoAutorizadoGeneral;
-                saveTrainingSampleButton.disabled = true;
+                toggleTrainingCaptureButton.textContent = "Iniciar Captura de Segmento";
+                toggleTrainingCaptureButton.className = 'btn-accion';
+                toggleTrainingCaptureButton.disabled = !estadoAutorizadoGeneral;
+                saveTrainingSampleButton.disabled = false; // Habilitar guardado cuando la captura está detenida
             }
         }
 
@@ -201,8 +201,7 @@
             .catch((error) => { console.error('Error:', error); mostrarMensaje('Error de red al cambiar autorización.', 'error'); });
         });
 
-        startTrainingCaptureButton.addEventListener('click', function() {
-            // Este botón ahora inicia y detiene la captura
+        toggleTrainingCaptureButton.addEventListener('click', function() {
             const endpoint = estadoCapturandoEntrenamiento ? '/api/detener_captura_entrenamiento' : '/api/iniciar_captura_entrenamiento';
             fetch(endpoint, { method: 'POST' })
             .then(response => response.json())
@@ -219,10 +218,14 @@
         saveTrainingSampleButton.addEventListener('click', function() {
             const pas = pasRefInput.value;
             const pad = padRefInput.value;
-            const hr = hrRefInput.value; // Obtener el valor de HR de referencia
+            const hr = hrRefInput.value; 
 
             if (!pas || !pad || !hr) {
                 mostrarMensaje("Por favor, ingrese PAS, PAD y Pulso de referencia.", "error");
+                return;
+            }
+            if (estadoCapturandoEntrenamiento) {
+                mostrarMensaje("Por favor, primero detenga la captura antes de guardar.", "error");
                 return;
             }
 
@@ -232,58 +235,97 @@
                 body: JSON.stringify({ 
                     pas_referencia: parseFloat(pas), 
                     pad_referencia: parseFloat(pad),
-                    hr_referencia: parseFloat(hr) // Enviar el HR de referencia
+                    hr_referencia: parseFloat(hr) 
                 }),
             })
             .then(response => response.json())
             .then(data => {
                 mostrarMensaje(data.mensaje || data.error || "Respuesta del servidor.", data.error ? 'error' : 'info');
                 if (!data.error) {
-                    pasRefInput.value = ''; padRefInput.value = ''; hrRefInput.value = ''; // Limpiar campos
-                    estadoCapturandoEntrenamiento = false; // El guardado detiene la captura en el backend
+                    pasRefInput.value = ''; padRefInput.value = ''; hrRefInput.value = ''; 
                     actualizarEstadoCapturaUI();
                 }
             })
             .catch(error => { console.error('Error:', error); mostrarMensaje("Error de red al guardar muestra.", "error");});
         });
 
-        // --- Funciones para obtener datos del servidor ---
+        // --- Funciones para obtener datos del servidor (sin cambios) ---
 
         function actualizarUltimaEstimacion() {
-            // ... (sin cambios, ya era funcional) ...
+            fetch('/api/ultima_estimacion').then(response => response.json()).then(data => {
+                document.getElementById('sysVal').textContent = data.sys || '---';
+                document.getElementById('diaVal').textContent = data.dia || '---';
+                document.getElementById('spo2Val').textContent = data.spo2 || '---';
+                document.getElementById('hrVal').textContent = data.hr || '---';
+                document.getElementById('nivelVal').textContent = data.nivel || '---';
+                document.getElementById('timestampVal').textContent = data.timestamp || '---';
+                if (data.modo_autorizado !== undefined && data.modo_autorizado !== estadoAutorizadoGeneral) {
+                    estadoAutorizadoGeneral = data.modo_autorizado;
+                    actualizarEstadoGeneralUI();
+                }
+            }).catch(error => console.error('Error al actualizar última estimación:', error));
         }
 
         function actualizarTablaMediciones() {
-           // ... (sin cambios, ya era funcional) ...
+            const historyErrorMessage = document.getElementById('history-error-message');
+            historyErrorMessage.textContent = ''; historyErrorMessage.style.display = 'none';
+            fetch('/api/ultimas_mediciones').then(response => {
+                if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json();
+            }).then(data => {
+                const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
+                tbody.innerHTML = ''; 
+                if (data && data.length > 0) {
+                    data.forEach(medicion => {
+                        let row = tbody.insertRow();
+                        row.insertCell().textContent = medicion.id !== undefined ? medicion.id : 'N/A';
+                        row.insertCell().textContent = medicion.id_paciente !== undefined ? medicion.id_paciente : 'N/A';
+                        row.insertCell().textContent = medicion.sys !== undefined ? medicion.sys : 'N/A';
+                        row.insertCell().textContent = medicion.dia !== undefined ? medicion.dia : 'N/A';
+                        row.insertCell().textContent = medicion.nivel || 'N/A';
+                    });
+                } else {
+                    let row = tbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5; 
+                    cell.textContent = 'No hay mediciones guardadas.'; cell.style.textAlign = 'center';
+                }
+            }).catch(error => {
+                console.error('Error al actualizar tabla:', error);
+                historyErrorMessage.textContent = `Error al cargar historial: ${error.message}`;
+                historyErrorMessage.style.display = 'block';
+                const tbody = document.getElementById('medicionesTable').getElementsByTagName('tbody')[0];
+                tbody.innerHTML = ''; let row = tbody.insertRow(); let cell = row.insertCell(); cell.colSpan = 5;
+                cell.textContent = 'Error al cargar historial.'; cell.style.textAlign = 'center';
+            });
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            // ... (sin cambios, ya era funcional) ...
+            fetch('/api/autorizacion').then(response => response.json()).then(data => {
+                if (data.autorizado !== undefined) estadoAutorizadoGeneral = data.autorizado;
+                if (data.capturando_entrenamiento !== undefined) estadoCapturandoEntrenamiento = data.capturando_entrenamiento;
+                actualizarEstadoGeneralUI();
+            }).catch(error => console.error('Error al obtener estado inicial:', error));
+            
+            actualizarUltimaEstimacion(); 
+            actualizarTablaMediciones(); 
+
+            setInterval(actualizarUltimaEstimacion, 5000); 
+            setInterval(actualizarTablaMediciones, 30000); 
         });
     </script>
+
 </body>
 </html>
 ```
 
-**Cambios Clave en este `index.html`:**
+**Resumen de Cambios Clave en `index.html`:**
 
-1.  **Sin Límite de Tiempo (Temporizador Eliminado):**
-    * Se ha eliminado el `div` del `countdown-timer`.
-    * Se ha eliminado la función `iniciarTemporizador()` y la constante `CAPTURE_DURATION`.
-    * Ahora la captura es manual: la inicias con un botón y la terminas (implícitamente) al guardar la muestra.
+1.  **Sin Límite de Tiempo:** Se eliminó por completo el conteo regresivo de 25 segundos.
+2.  **Botón de Captura Toggle:** El botón "Iniciar Captura de Segmento" ahora cambia su texto a "Detener Captura" y llama a diferentes endpoints (`/api/iniciar_captura_entrenamiento` y `/api/detener_captura_entrenamiento`) para darte control manual sobre la duración de la captura.
+3.  **Nuevo Campo de Entrada:** Se añadió el campo `hrRef` para que puedas ingresar el "Pulso de Referencia".
+4.  **Lógica de Guardado Actualizada:** El botón "Guardar Muestra de Entrenamiento" ahora recopila los tres valores (PAS, PAD y el nuevo HR de referencia) y los envía al servidor.
+5.  **Flujo de Trabajo Mejorado:** La interfaz ahora te guía mejor:
+    * Primero, inicias la captura.
+    * Mientras capturas, tomas la medición con el tensiómetro.
+    * Luego, detienes la captura.
+    * Finalmente, ingresas los tres valores de referencia y guardas la muestra.
 
-2.  **Nuevo Campo para Pulso de Referencia:**
-    * Se ha añadido un campo de entrada para el pulso:
-      ```html
-      <label for="hrRef">Pulso Ref:</label>
-      <input type="number" id="hrRef" placeholder="Ej: 75">
-      ```
-3.  **Botón de Captura como Interruptor (Toggle):**
-    * El botón "Iniciar Captura de Segmento" ahora cambia su texto a "Detener Captura" cuando la captura está activa.
-    * Llama a `/api/iniciar_captura_entrenamiento` para empezar y a `/api/detener_captura_entrenamiento` (que debes añadir a tu `app.py`) para detenerla. Esto te da control total sobre la duración del segmento de datos.
-
-4.  **Lógica de Guardado Actualizada:**
-    * La función `saveTrainingSampleButton.addEventListener('click', ...)` ahora también lee el valor del `hrRefInput`.
-    * Envía `hr_referencia` en el cuerpo JSON de la petición a `/api/guardar_muestra_entrenamiento`.
-
-Con este `index.html` y el `app.py` que ya incluye el campo `hr_referencia` en el endpoint de guardado, tienes un sistema mucho más robusto y flexible para la recolección de tus datos de entrenamien
+Ahora, con este `index.html` y el `app.py` que te di anteriormente, tienes el sistema completo para recolectar datos de alta calidad para tu modelo de Machine Learni
