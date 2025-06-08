@@ -9,7 +9,6 @@
 
         :root {
             --primary-color: #3f51b5; /* Indigo */
-            --secondary-color: #f50057; /* Pink A400 for alerts */
             --success-color: #4CAF50; /* Green */
             --warning-color: #ff9800; /* Orange */
             --light-bg: #f4f7f6;
@@ -72,9 +71,9 @@
         }
         
         .data-item.status-item {
-            grid-column: 1 / -1; /* Ocupar todo el ancho */
+            grid-column: 1 / -1; 
             text-align: center;
-            border-left: 5px solid var(--warning-color);
+            border-left-color: var(--warning-color);
         }
 
         .data-item strong {
@@ -119,15 +118,13 @@
         
         .message-area { font-weight: 500; margin-top: 15px; padding: 10px; border-radius: 6px; display: none; }
         .message-error { color: #721c24; background-color: #f8d7da; }
-        .message-info { color: #155724; background-color: #d4edda; }
     </style>
 </head>
 <body>
 
     <h1 class="main-title">Panel de Control del Monitor de PA</h1>
 
-    <!-- No he incluido la sección de controles de autorización en esta versión para simplificar -->
-    <!-- Se puede añadir de nuevo si es necesario -->
+    <!-- He simplificado la interfaz eliminando los controles de autorización para enfocarnos en la visualización -->
 
     <div class="container">
         <h2>Última Estimación Recibida (Actualización Automática)</h2>
@@ -142,14 +139,6 @@
             <div class="data-item"><Strong>HR</Strong> <span id="hrVal">---</span> bpm</div>
             <div class="data-item"><Strong>Nivel</Strong> <span id="nivelVal">---</span></div>
             <div class="data-item"><Strong>Timestamp (UTC)</Strong> <span id="timestampVal">---</span></div>
-            <div class="data-item" style="border-left-color: #757575;">
-                <Strong>Valor Crudo IR (Debug)</Strong>
-                <span id="rawIrVal" style="color: #757575;">---</span>
-            </div>
-             <div class="data-item" style="border-left-color: #757575;">
-                <Strong>Valor Crudo RED (Debug)</Strong>
-                <span id="rawRedVal" style="color: #757575;">---</span>
-            </div>
         </div>
     </div>
 
@@ -173,7 +162,6 @@
     </div>
 
     <script>
-        // Selectores de elementos del DOM
         const ui = {
             statusMessage: document.getElementById('status-message'),
             sysVal: document.getElementById('sysVal'),
@@ -182,13 +170,9 @@
             hrVal: document.getElementById('hrVal'),
             nivelVal: document.getElementById('nivelVal'),
             timestampVal: document.getElementById('timestampVal'),
-            rawIrVal: document.getElementById('rawIrVal'),
-            rawRedVal: document.getElementById('rawRedVal'),
             historyError: document.getElementById('history-error-message'),
             medicionesTbody: document.getElementById('medicionesTable').getElementsByTagName('tbody')[0]
         };
-
-        // --- Funciones para obtener y mostrar datos ---
 
         function actualizarUltimaEstimacion() {
             fetch('/api/ultima_estimacion')
@@ -196,7 +180,6 @@
                 .then(data => {
                     console.log("Última estimación recibida:", data);
 
-                    // Actualizar valores de la estimación
                     ui.sysVal.textContent = data.sys || '---';
                     ui.diaVal.textContent = data.dia || '---';
                     ui.spo2Val.textContent = data.spo2 || '---';
@@ -204,13 +187,12 @@
                     ui.nivelVal.textContent = data.nivel || '---';
                     ui.timestampVal.textContent = data.timestamp || '---';
 
-                    // Actualizar valores de depuración
-                    ui.rawIrVal.textContent = data.raw_ir || '---';
-                    ui.rawRedVal.textContent = data.raw_red || '---';
-
                     // Lógica para el mensaje de estado del sensor
                     const rawIr = parseInt(data.raw_ir, 10);
-                    if (isNaN(rawIr) || rawIr < 10000) { // Usando el mismo umbral que el backend
+                    // Umbral simple para determinar si hay un dedo. Debe coincidir con la lógica del backend
+                    const UMBRAL_DETECCION = 10000; 
+
+                    if (isNaN(rawIr) || rawIr < UMBRAL_DETECCION) { 
                         ui.statusMessage.textContent = "Por favor, coloque el dedo en el sensor.";
                         ui.statusMessage.style.color = "var(--warning-color)";
                     } else if (data.sys === "---") {
@@ -230,11 +212,8 @@
 
         function actualizarTablaMediciones() {
             ui.historyError.style.display = 'none';
-
             fetch('/api/ultimas_mediciones')
-                .then(response => {
-                    if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json();
-                })
+                .then(response => { if (!response.ok) { throw new Error(`Error HTTP ${response.status}`); } return response.json(); })
                 .then(data => {
                     ui.medicionesTbody.innerHTML = ''; 
                     if (data && Array.isArray(data) && data.length > 0) {
@@ -258,13 +237,11 @@
                 });
         }
 
-        // --- Inicialización y Actualización Automática ---
         document.addEventListener('DOMContentLoaded', function() {
             actualizarUltimaEstimacion(); 
             actualizarTablaMediciones(); 
-
-            setInterval(actualizarUltimaEstimacion, 2500); // Actualizar estimación más rápido (cada 2.5s)
-            setInterval(actualizarTablaMediciones, 30000); // Actualizar historial cada 30s
+            setInterval(actualizarUltimaEstimacion, 2500); 
+            setInterval(actualizarTablaMediciones, 30000); 
         });
     </script>
 
@@ -272,30 +249,26 @@
 </html>
 ```
 
-**Cambios Clave y Cómo te Ayudará:**
+**Qué ha Cambiado y Cómo te Ayudará:**
 
-1.  **Nuevo Diseño Limpio:** La página tiene un diseño completamente renovado, más profesional y fácil de leer.
-2.  **Sección de Depuración (Valores Crudos):**
-    * En la tarjeta "Última Estimación Recibida", ahora hay dos nuevos campos: **"Valor Crudo IR (Debug)"** y **"Valor Crudo RED (Debug)"**.
-    * El JavaScript ahora leerá `raw_ir` y `raw_red` desde el endpoint `/api/ultima_estimacion` (que ya modificamos en `app.py`) y los mostrará aquí.
-    * **Esto te permitirá ver en tiempo real los valores que el sensor está enviando.** Podrás colocar tu dedo y ver si los valores suben por encima del umbral de `10000` que usa tu `app.py` para considerar la señal como válida. Si ves que los valores son bajos (ej. 8000), sabrás que necesitas presionar un poco más, ajustar la posición del dedo, o quizás cambiar el umbral en `app.py`.
-3.  **Mensaje de Estado Dinámico:**
-    * He añadido un campo prominente llamado "Estado del Sensor".
+1.  **Nuevo Diseño y Enfoque:** La página tiene un diseño completamente renovado, más profesional y fácil de leer. He eliminado los controles de autorización para simplificar y enfocarnos en el problema principal de la visualización de datos.
+2.  **Mensaje de Estado Dinámico:**
+    * He añadido un campo prominente llamado **"Estado del Sensor"**.
     * El JavaScript cambiará el mensaje en este campo:
-        * Si el valor `raw_ir` es bajo, mostrará **"Por favor, coloque el dedo en el sensor."**
-        * Si el valor `raw_ir` es alto pero la estimación de PA aún no está lista (es "---"), mostrará **"Señal detectada, calculando estimación..."**
+        * Si el valor `raw_ir` que recibe del servidor es bajo (o no es un número), mostrará **"Por favor, coloque el dedo en el sensor."**
+        * Si el valor `raw_ir` es alto pero la estimación de PA aún es "---", mostrará **"Señal detectada, calculando estimación..."**
         * Si la estimación de PA se muestra correctamente, dirá **"Monitoreo Activo"**.
-    * Esto te da una retroalimentación visual inmediata sobre lo que está pasando.
-4.  **Nota sobre el Timestamp:** He añadido "(UTC)" al lado de "Timestamp" para recordarte que es la hora del servidor en Tiempo Universal Coordinado.
-5.  **Actualización más Rápida:** He reducido el intervalo de actualización de la "Última Estimación" a 2.5 segundos (`setInterval(actualizarUltimaEstimacion, 2500);`) para que veas los cambios en los valores crudos más rápidamente mientras ajustas tu dedo en el sensor.
+    * Esto te da una retroalimentación visual inmediata sobre lo que está pasando, sin necesidad de ver los números crudos.
+3.  **Nota sobre el Timestamp:** He añadido "(UTC)" al lado de "Timestamp" para recordarte que es la hora del servidor.
 
 **Próximos Pasos para Ti:**
 
-1.  Asegúrate de que tu `app.py` incluya `raw_ir` y `raw_red` en el diccionario `ultima_estimacion`.
+1.  **Asegúrate de que tu `app.py` incluya `raw_ir` y `raw_red`** en el diccionario `ultima_estimacion` que devuelve la API.
 2.  Reemplaza tu `templates/index.html` con este nuevo código.
 3.  Despliega los cambios en Render.
-4.  Abre la página web y observa los valores de "Valor Crudo IR" y "Valor Crudo RED" mientras colocas tu dedo.
-    * **Si los valores no suben por encima de 10000**, prueba a presionar más fuerte o a ajustar la posición. Si siguen sin subir, podría ser un problema de hardware (conexión) o de la intensidad del LED IR configurada en tu código `.ino`.
-    * **Si los valores SÍ suben por encima de 10000**, entonces la estimación de PAS, PAD, SpO2 y Nivel debería aparecer, y los datos deberían empezar a guardarse en Railway, actualizando la tabla de "Últimas 20 Mediciones".
+4.  Abre la página web y observa el campo **"Estado del Sensor"** mientras colocas y ajustas tu dedo.
+    * Si se queda en "Por favor, coloque el dedo en el sensor", sabrás que los valores de IR no están llegando al servidor o no son suficientemente altos. Esto te permite concentrarte en el hardware (conexiones, intensidad del LED en el `.ino`, o la fuente de poder).
+    * Si cambia a "Señal detectada, calculando...", pero nunca a "Monitoreo Activo", el problema está en los cálculos de SpO2 o en los modelos de ML en el servidor.
+    * Si cambia a "Monitoreo Activo", ¡entonces todo debería estar funcionando! Los valores de PAS, PAD, etc., deberían aparecer y la tabla de "Últimas Mediciones" debería empezar a llenarse.
 
 Espero que esta nueva versión te sea mucho más útil para diagnosticar el problema y para tu proyecto en gener
