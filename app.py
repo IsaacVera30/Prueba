@@ -50,7 +50,7 @@ FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" 
 
 # --- Configuración de CallMeBot (desde variables de entorno) ---
-CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER') # Tu número, ej: 593992098466
+CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER') # Tu número, ej: 593*******
 CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY') # La API Key que te dio el bot
 
 # --- Funciones ---
