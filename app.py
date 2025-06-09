@@ -17,7 +17,7 @@ from urllib.parse import quote # Para codificar el texto del mensaje
 
 app = Flask(__name__)
 
-# --- Carga de Modelos de Machine Learning (sin cambios) ---
+# --- Carga de Modelos de Machine Learning ---
 MODEL_SYS_PATH = "modelo_sys.pkl"
 MODEL_DIA_PATH = "modelo_dia.pkl"
 modelo_sys = None; modelo_dia = None
@@ -28,7 +28,7 @@ try:
     else: print("⚠️ Advertencia: Uno o ambos modelos de ML no se encontraron.")
 except Exception as e: print(f"❌ Error al cargar modelos: {e}")
 
-# --- Variables Globales (sin cambios) ---
+# --- Variables Globales ---
 autorizado = False; capturando_entrenamiento = False; buffer_datos_entrenamiento = [] 
 ultima_estimacion = {
     "sys": "---", "dia": "---", "spo2": "---", "hr": "---", "nivel": "---", 
@@ -36,7 +36,7 @@ ultima_estimacion = {
 }
 ventana_ir = []; ventana_red = []; MUESTRAS = 10 
 
-# --- Configuración DB y Drive (sin cambios) ---
+# --- Configuración DB, Drive y CallMeBot (desde variables de entorno) ---
 DB_HOST = os.environ.get('DB_HOST', os.environ.get("MYSQLHOST")) 
 DB_USER = os.environ.get('DB_USER', os.environ.get("MYSQLUSER"))
 DB_PASSWORD = os.environ.get('DB_PASSWORD', os.environ.get("MYSQLPASSWORD"))
@@ -49,16 +49,15 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") 
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" 
 
-# --- Configuración de CallMeBot (desde variables de entorno) ---
-CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER') # Tu número, ej: 593*******
-CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY') # La API Key que te dio el bot
+CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER')
+CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY')
 
 # --- Funciones ---
 
 def send_whatsapp_alert(message_body):
     """Envía una alerta por WhatsApp usando CallMeBot."""
     if not all([CALLMEBOT_PHONE_NUMBER, CALLMEBOT_API_KEY]):
-        print("⚠️ Advertencia CallMeBot: Faltan variables de entorno CALLMEBOT_PHONE_NUMBER o CALLMEBOT_API_KEY. No se puede enviar WhatsApp.")
+        print("⚠️ Advertencia CallMeBot: Faltan variables de entorno. No se puede enviar WhatsApp.")
         return False
     
     message_encoded = quote(message_body)
@@ -69,21 +68,67 @@ def send_whatsapp_alert(message_body):
         response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
-            print(f"✅ Alerta de WhatsApp enviada a CallMeBot. Respuesta del servidor: {response.text}")
+            print(f"✅ Alerta de WhatsApp enviada a CallMeBot. Respuesta: {response.text}")
             return True
         else:
-            print(f"❌ Error al enviar WhatsApp con CallMeBot. Código de estado: {response.status_code}, Respuesta: {response.text}")
+            print(f"❌ Error al enviar WhatsApp con CallMeBot. Código: {response.status_code}, Respuesta: {response.text}")
             return False
-
     except requests.exceptions.RequestException as e:
         print(f"❌ Excepción al enviar WhatsApp con CallMeBot: {e}")
         return False
 
-# ... (El resto de tus funciones auxiliares como filtrar_senal_ppg, extraer_caracteristicas_ppg, 
-#      calcular_spo2_desde_origen, clasificar_nivel_presion, conectar_db, guardar_medicion_mysql, 
-#      get_google_drive_service, subir_archivo_a_drive se mantienen igual que en la versión anterior) ...
+def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
+    try:
+        nyquist = 0.5 * fs; low = lowcut / nyquist; high = highcut / nyquist
+        b, a = butter(order, [low, high], btype='band'); return filtfilt(b, a, senal)
+    except Exception: return np.array(senal)
 
-# --- Endpoints Flask ---
+def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_promedio):
+    ir_filtrado = filtrar_senal_ppg(segmento_ir)
+    red_filtrado = filtrar_senal_ppg(segmento_red)
+    caracteristicas = {
+        "hr_promedio_sensor": round(hr_promedio, 2) if hr_promedio is not None else -1,
+        "spo2_promedio_sensor": round(spo2_promedio, 2) if spo2_promedio is not None else -1,
+        "ir_mean_filtrado": round(np.mean(ir_filtrado), 2) if len(ir_filtrado) > 0 else -1,
+        "red_mean_filtrado": round(np.mean(red_filtrado), 2) if len(red_filtrado) > 0 else -1,
+        "ir_std_filtrado": round(np.std(ir_filtrado), 2) if len(ir_filtrado) > 0 else -1,
+        "red_std_filtrado": round(np.std(red_filtrado), 2) if len(red_filtrado) > 0 else -1
+    }
+    return caracteristicas
+
+def clasificar_nivel_presion(pas_valor, pad_valor):
+    if pas_valor is None or pd.isna(pas_valor) or pas_valor == -1: return "---"
+    if pas_valor > 180 or pad_valor > 120: return "HT Crisis"
+    elif pas_valor >= 140 or pad_valor >= 90: return "HT2"        
+    elif (pas_valor >= 130 and pas_valor <= 139) or (pad_valor >= 80 and pad_valor <= 89): return "HT1"        
+    elif (pas_valor >= 120 and pas_valor <= 129) and pad_valor < 80: return "Elevada"
+    elif pas_valor < 120 and pad_valor < 80: return "Normal"
+    else: 
+        if pad_valor >= 80: 
+             if pad_valor >= 90: return "HT2"
+             else: return "HT1" 
+        return "Revisar" 
+
+def conectar_db():
+    if not all([DB_CONFIG['host'], DB_CONFIG['user'], DB_CONFIG['database']]): print("Error: Configuración DB incompleta."); return None
+    try: conn = mysql.connector.connect(**DB_CONFIG); return conn
+    except mysql.connector.Error as err: print(f"❌ Error conexión MySQL: {err}"); return None
+
+# --- FUNCIÓN CORREGIDA PARA GUARDAR SOLO id_paciente, sys, dia, nivel EN RAILWAY ---
+def guardar_medicion_mysql(id_paciente, sys_valor, dia_valor, nivel):
+    conn = conectar_db(); 
+    if conn is None: return False
+    cursor = conn.cursor()
+    query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
+    try:
+        cursor.execute(query, (id_paciente, sys_valor, dia_valor, nivel)); conn.commit()
+        print(f"MySQL: Datos guardados: {id_paciente}, {sys_valor}, {dia_valor}, {nivel}")
+        return True
+    except mysql.connector.Error as err: print(f"❌ Error MySQL: {err}"); conn.rollback(); return False
+    finally:
+        if conn.is_connected(): cursor.close(); conn.close()
+
+# ... (funciones get_google_drive_service y subir_archivo_a_drive sin cambios) ...
 
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
@@ -104,14 +149,14 @@ def api_procesar_presion():
         test_pad = data.get("test_pad")
 
         if test_pas is not None and test_pad is not None:
-            # Si se envían valores de prueba desde Postman, usarlos directamente
             print(f"🧪 MODO PRUEBA: Usando valores PAS/PAD manuales: {test_pas}/{test_pad}")
             sys_estimada = float(test_pas)
             dia_estimada = float(test_pad)
-            spo2_estimada = 98.0 # Un valor de SpO2 de ejemplo para la prueba
+            # Para modo prueba, podemos usar valores fijos para lo demás
+            spo2_estimada = 98.0
             hr = float(hr_in)
         else:
-            # Si no hay valores de prueba, proceder con la lógica normal de estimación
+            # Lógica normal de estimación si no es una prueba
             try: hr = int(hr_in); ir_val = int(ir_in); red_val = int(red_in) 
             except ValueError: return jsonify({"error": "Datos deben ser numéricos"}), 400
             
@@ -122,6 +167,7 @@ def api_procesar_presion():
 
             spo2_estimada = 0.0 
             if len(ventana_ir) == MUESTRAS:
+                # ... (Lógica de cálculo de SpO2 como en tu código origen) ...
                 try:
                     np_ventana_ir = np.array(ventana_ir); np_ventana_red = np.array(ventana_red)
                     dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
@@ -171,5 +217,6 @@ def api_procesar_presion():
         return jsonify({"error": "Error interno", "detalle": str(e)}), 500
 
 # El resto de tus endpoints (/ , /iniciar_captura..., etc.) se mantienen igual
+# ...
 ```
-*Nota: Para mantener la respuesta concisa, he omitido las funciones y endpoints que no necesitaban cambios. Debes **integrar la nueva lógica para `test_pas` y `test_pad` dentro de tu función `/api/presion` existente*
+*He omitido el resto de las funciones y endpoints que no cambian para mantener la respuesta concisa. Asegúrate de integrar estos cambios en tu archivo `app.py` complet
