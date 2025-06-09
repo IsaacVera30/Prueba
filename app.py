@@ -11,9 +11,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from scipy.signal import butter, filtfilt
 
-# Importar la librería de Twilio
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
+# Importar la librería para hacer peticiones HTTP
+import requests
+from urllib.parse import quote # Para codificar el texto del mensaje
 
 app = Flask(__name__)
 
@@ -54,31 +54,38 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "1tYCn9x-fDQUkHTOSNClGKtYU0Yov2OM-") 
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv" 
 
-# --- Configuración de Twilio (desde variables de entorno) ---
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
-TWILIO_WHATSAPP_NUMBER = os.environ.get('TWILIO_WHATSAPP_NUMBER') # ej: whatsapp:+158*********
-RECIPIENT_WHATSAPP_NUMBER = os.environ.get('RECIPIENT_WHATSAPP_NUMBER') # ej: whatsapp:+593*********
+# --- Configuración de CallMeBot (desde variables de entorno) ---
+CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER') # Tu número, ej: 5939*******
+CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY') # La API Key que te dio el bot
 
 # --- Funciones ---
 
 def send_whatsapp_alert(message_body):
-    """Envía una alerta por WhatsApp usando Twilio."""
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, RECIPIENT_WHATSAPP_NUMBER]):
-        print("⚠️ Advertencia Twilio: Faltan variables de entorno. No se puede enviar WhatsApp.")
+    """Envía una alerta por WhatsApp usando CallMeBot."""
+    if not all([CALLMEBOT_PHONE_NUMBER, CALLMEBOT_API_KEY]):
+        print("⚠️ Advertencia CallMeBot: Faltan variables de entorno CALLMEBOT_PHONE_NUMBER o CALLMEBOT_API_KEY. No se puede enviar WhatsApp.")
         return False
     
+    # Codificar el mensaje para que sea seguro en una URL
+    message_encoded = quote(message_body)
+    
+    # Construir la URL de la API de CallMeBot
+    url = f"https://api.callmebot.com/whatsapp.php?phone={CALLMEBOT_PHONE_NUMBER}&text={message_encoded}&apikey={CALLMEBOT_API_KEY}"
+    
     try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        message = client.messages.create(
-                              from_=TWILIO_WHATSAPP_NUMBER,
-                              body=message_body,
-                              to=RECIPIENT_WHATSAPP_NUMBER
-                          )
-        print(f"✅ Alerta de WhatsApp enviada con SID: {message.sid}")
-        return True
-    except TwilioRestException as e:
-        print(f"❌ Error al enviar WhatsApp con Twilio: {e}")
+        print(f"Intentando enviar alerta de WhatsApp a {CALLMEBOT_PHONE_NUMBER} vía CallMeBot...")
+        response = requests.get(url, timeout=10) # Enviar la petición GET, con un timeout de 10 segundos
+        
+        # CallMeBot responde con texto plano, no JSON. El código 200 indica que la petición fue recibida.
+        if response.status_code == 200:
+            print(f"✅ Alerta de WhatsApp enviada a CallMeBot. Respuesta del servidor: {response.text}")
+            return True
+        else:
+            print(f"❌ Error al enviar WhatsApp con CallMeBot. Código de estado: {response.status_code}, Respuesta: {response.text}")
+            return False
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Excepción al enviar WhatsApp con CallMeBot: {e}")
         return False
 
 def filtrar_senal_ppg(senal, lowcut=0.5, highcut=5.0, fs=50.0, order=4):
@@ -160,6 +167,13 @@ def subir_archivo_a_drive(file_path, file_name_on_drive):
 
 # --- Endpoints Flask ---
 
+@app.route("/")
+def home():
+    global ultima_estimacion, autorizado, capturando_entrenamiento
+    ultima_estimacion["modo_autorizado"] = autorizado 
+    ultima_estimacion["capturando_entrenamiento"] = capturando_entrenamiento
+    return render_template("index.html", autorizado=autorizado, estimacion=ultima_estimacion)
+
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
     global autorizado, ultima_estimacion, modelo_sys, modelo_dia, ventana_ir, ventana_red, capturando_entrenamiento, buffer_datos_entrenamiento
@@ -169,33 +183,41 @@ def api_procesar_presion():
         data = request.get_json();
         if not data: return jsonify({"error": "Request JSON"}), 400
         
-        hr = int(data.get("hr", 0)); ir_val = int(data.get("ir", 0)); red_val = int(data.get("red", 0))
-        id_paciente_in = int(data.get("id_paciente", 1)) 
+        hr_in = data.get("hr", 75); ir_in = data.get("ir", 0); red_in = data.get("red", 0)
+        id_paciente_in = data.get("id_paciente", 99) 
+        test_pas = data.get("test_pas"); test_pad = data.get("test_pad")
 
-        if capturando_entrenamiento:
-            buffer_datos_entrenamiento.append({"hr": hr, "ir": ir_val, "red": red_val, "timestamp": datetime.now()})
+        if test_pas is not None and test_pad is not None:
+            print(f"🧪 MODO PRUEBA: Usando valores PAS/PAD manuales: {test_pas}/{test_pad}")
+            sys_estimada = float(test_pas); dia_estimada = float(test_pad)
+            spo2_estimada = 98.0; hr = float(hr_in)
+        else:
+            try: hr = int(hr_in); ir_val = int(ir_in); red_val = int(red_in) 
+            except ValueError: return jsonify({"error": "Datos deben ser numéricos"}), 400
+            
+            # Restaurada la lógica de tu código origen para SpO2 y predicción
+            ventana_ir.append(ir_val)
+            ventana_red.append(red_val)
+            if len(ventana_ir) > MUESTRAS: ventana_ir.pop(0)
+            if len(ventana_red) > MUESTRAS: ventana_red.pop(0)
 
-        # Restaurada la lógica de tu código origen para SpO2 y predicción
-        ventana_ir.append(ir_val)
-        ventana_red.append(red_val)
-        if len(ventana_ir) > MUESTRAS: ventana_ir.pop(0)
-        if len(ventana_red) > MUESTRAS: ventana_red.pop(0)
-        spo2_estimada = 0.0 
-        if len(ventana_ir) == MUESTRAS:
-            try:
-                np_ventana_ir = np.array(ventana_ir); np_ventana_red = np.array(ventana_red)
-                dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
-                ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir)) 
-                ac_red = np.mean(np.abs(np_ventana_red - dc_red))
-                if dc_ir > 0 and dc_red > 0: 
-                    ratio = (ac_red / dc_red) / (ac_ir / dc_ir) if ac_ir > 0 and ac_red > 0 else 0
-                    spo2_calc = 110 - 25 * ratio
-                    spo2_estimada = max(70.0, min(100.0, spo2_calc))
-            except Exception as e_spo2: print(f"Error en cálculo SpO2: {e_spo2}"); spo2_estimada = 0.0
-        
-        entrada_df = pd.DataFrame([[float(hr), float(spo2_estimada)]], columns=['hr', 'spo2'])
-        sys_estimada = round(modelo_sys.predict(entrada_df)[0], 2)
-        dia_estimada = round(modelo_dia.predict(entrada_df)[0], 2)
+            spo2_estimada = 0.0 
+            if len(ventana_ir) == MUESTRAS:
+                try:
+                    np_ventana_ir = np.array(ventana_ir); np_ventana_red = np.array(ventana_red)
+                    dc_ir = np.mean(np_ventana_ir); dc_red = np.mean(np_ventana_red)
+                    ac_ir = np.mean(np.abs(np_ventana_ir - dc_ir)) 
+                    ac_red = np.mean(np.abs(np_ventana_red - dc_red))
+                    if dc_ir > 0 and dc_red > 0: 
+                        ratio = (ac_red / dc_red) / (ac_ir / dc_ir) if ac_ir > 0 and ac_red > 0 else 0
+                        spo2_calc = 110 - 25 * ratio
+                        spo2_estimada = max(70.0, min(100.0, spo2_calc))
+                except Exception as e_spo2: print(f"Error en cálculo SpO2: {e_spo2}"); spo2_estimada = 0.0
+            
+            entrada_df = pd.DataFrame([[float(hr), float(spo2_estimada)]], columns=['hr', 'spo2'])
+            sys_estimada = round(modelo_sys.predict(entrada_df)[0], 2)
+            dia_estimada = round(modelo_dia.predict(entrada_df)[0], 2)
+
         nivel_presion = clasificar_nivel_presion(sys_estimada, dia_estimada)
         
         ultima_estimacion = {
@@ -205,20 +227,18 @@ def api_procesar_presion():
             "modo_autorizado": autorizado, "capturando_entrenamiento": capturando_entrenamiento
         }
 
-        # --- LLAMADA A LA FUNCIÓN DE ALERTA DE WHATSAPP ---
         if nivel_presion == "HT Crisis":
             print("🚨 Detectada Crisis Hipertensiva, intentando enviar alerta por WhatsApp...")
             mensaje_alerta = (f"¡ALERTA MÉDICA URGENTE! 🚑\n\n"
-                              f"El dispositivo del paciente ID {id_paciente_in} ha registrado una posible **Crisis Hipertensiva**.\n\n"
-                              f"Valores Estimados:\n"
-                              f"  - *Presión Sistólica (PAS):* {sys_estimada} mmHg\n"
-                              f"  - *Presión Diastólica (PAD):* {dia_estimada} mmHg\n\n"
+                              f"Dispositivo del paciente ID {id_paciente_in} ha registrado una posible **Crisis Hipertensiva**.\n\n"
+                              f"Valores Registrados:\n"
+                              f"  - *PAS:* {sys_estimada} mmHg\n"
+                              f"  - *PAD:* {dia_estimada} mmHg\n\n"
                               f"Timestamp: {ultima_estimacion['timestamp']} (UTC).\n\n"
-                              f"**Se recomienda verificar el estado del paciente inmediatamente.**")
+                              f"**Verificar inmediatamente.**")
             send_whatsapp_alert(mensaje_alerta)
-        # --- FIN LLAMADA ---
         
-        if ir_val > 20000 and red_val > 15000: 
+        if (data.get("ir", 0) > 20000 and data.get("red", 0) > 15000) or (test_pas is not None): 
             guardar_medicion_mysql(id_paciente_in, sys_estimada, dia_estimada, nivel_presion)
         
         return jsonify({
@@ -229,8 +249,9 @@ def api_procesar_presion():
         print(f"❌ Error en /api/presion: {e}"); import traceback; traceback.print_exc()
         return jsonify({"error": "Error interno", "detalle": str(e)}), 500
 
-# El resto de tus endpoints (/ , /iniciar_captura..., /detener_captura..., /guardar_muestra..., /ultimas_mediciones, /autorizacion, /ultima_estimacion)
-# y el bloque if __name__ == "__main__": se mantendrían como en la versión anterior (app_py_ml_flexible_capture_final)
-# ya que no cambian para esta funcionalidad.
+# ... (El resto de tus endpoints: /iniciar_captura..., /detener_captura..., /guardar_muestra..., 
+#      /ultimas_mediciones, /autorizacion, /ultima_estimacion se mantienen igual que en la versión anterior) ...
+
+# ... (El bloque if __name__ == "__main__": se mantiene igual) ...
 ```
-*Nota: Para mantener la respuesta enfocada, he omitido las funciones y endpoints que no cambian. Debes **añadir la nueva función `send_whatsapp_alert` y la nueva lógica de llamada a esta función dentro de `/api/presion` a tu archivo `app.py` completo** que ya tienes, junto con las variables de configuración de Twilio al principio del scrip
+*Nota: Para mantener la respuesta enfocada, he omitido las funciones y endpoints que no necesitaban cambios. Debes **integrar la nueva función `send_whatsapp_alert` y la nueva lógica de configuración de CallMeBot en tu archivo `app.py` completo**, así como la lógica para manejar los valores de prueba en el endpoint `/api/presion
