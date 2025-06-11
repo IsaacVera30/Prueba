@@ -1,73 +1,137 @@
-from flask import Flask, request, jsonify, render_template
-import pandas as pd
-import joblib
-import numpy as np
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import csv
 import os
+import time
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)
 
-# --- Carga de Modelos ---
-modelo_sys = joblib.load("modelo_sys.pkl") if os.path.exists("modelo_sys.pkl") else None
-modelo_dia = joblib.load("modelo_dia.pkl") if os.path.exists("modelo_dia.pkl") else None
+# --- Variables Globales ---
+autorizado_general = False
+capturando_entrenamiento = False
+buffer_datos_entrenamiento = []
+NUM_MUESTRAS_ENTRENAMIENTO = 15
 
-ultima_estimacion = {
-    "sys": "---", "dia": "---", "spo2": "---",
-    "hr": "---", "nivel": "---", "timestamp": "---",
-    "hr_sensor": "---", "spo2_sensor": "---", "ir": "---", "red": "---"
-}
+# Ruta del archivo CSV
+csv_file = 'datos_entrenamiento.csv'
 
-# --- Clasificación del estado ---
-def clasificar_nivel_presion(pas, pad):
-    try:
-        pas = float(pas)
-        pad = float(pad)
-        if pas > 180 or pad > 120: return "HT Crisis"
-        elif pas >= 140 or pad >= 90: return "HT2"
-        elif (130 <= pas <= 139) or (80 <= pad <= 89): return "HT1"
-        elif 120 <= pas <= 129 and pad < 80: return "Elevada"
-        elif pas < 120 and pad < 80: return "Normal"
-        else: return "Revisar"
-    except: return "---"
-
-@app.route("/")
-def home():
-    return render_template("index.html", estimacion=ultima_estimacion)
-
-@app.route("/api/presion", methods=["POST"])
+# --- Endpoint para recibir datos desde el ESP32 ---
+@app.route('/api/presion', methods=['POST'])
 def recibir_datos():
-    global ultima_estimacion
+    global buffer_datos_entrenamiento
+
     data = request.get_json()
-    try:
-        hr = int(data.get("hr", -1))
-        spo2 = float(data.get("spo2", -1))
-        ir = int(data.get("ir", -1))
-        red = int(data.get("red", -1))
+    hr_prom = data.get('hr')
+    ir = data.get('ir')
+    red = data.get('red')
+    spo2 = data.get('spo2')
+    timestamp = datetime.utcnow().isoformat()
 
-        # Guardar datos del sensor
-        ultima_estimacion["hr_sensor"] = hr
-        ultima_estimacion["spo2_sensor"] = spo2
-        ultima_estimacion["ir"] = ir
-        ultima_estimacion["red"] = red
+    if capturando_entrenamiento:
+        buffer_datos_entrenamiento.append({
+            'hr_promedio_sensor': hr_prom,
+            'spo2_promedio_sensor': spo2,
+            'ir_mean_filtrado': ir,
+            'red_mean_filtrado': red,
+            'timestamp_captura': timestamp
+        })
+        print(f"[Captura ML] {len(buffer_datos_entrenamiento)}/15 muestras almacenadas...")
 
-        # Predicción con ML
-        if modelo_sys and modelo_dia:
-            entrada = pd.DataFrame([[hr, spo2]], columns=["hr", "spo2"])
-            sys = round(float(modelo_sys.predict(entrada)[0]), 2)
-            dia = round(float(modelo_dia.predict(entrada)[0]), 2)
-            nivel = clasificar_nivel_presion(sys, dia)
-            ultima_estimacion.update({
-                "sys": sys, "dia": dia, "spo2": spo2,
-                "hr": hr, "nivel": nivel,
-                "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            })
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    # Simulamos respuesta del modelo ML
+    respuesta = {
+        'sys': 125,
+        'dia': 82,
+        'hr': hr_prom,
+        'spo2': spo2,
+        'nivel': 'Normal'
+    }
+    return jsonify(respuesta)
 
-@app.route("/api/ultima_estimacion", methods=["GET"])
-def get_ultima():
-    return jsonify(ultima_estimacion)
+# --- Endpoint para autorización general ---
+@app.route('/api/autorizacion', methods=['GET', 'POST'])
+def autorizacion():
+    global autorizado_general
+    if request.method == 'GET':
+        return jsonify({ 'autorizado': autorizado_general })
+    else:
+        data = request.get_json()
+        autorizado_general = data.get('autorizado', False)
+        return jsonify({ 'autorizado': autorizado_general, 'mensaje': 'Estado actualizado.' })
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
+# --- Iniciar / Detener captura de entrenamiento ---
+@app.route('/api/iniciar_captura_entrenamiento', methods=['POST'])
+def iniciar_captura():
+    global capturando_entrenamiento, buffer_datos_entrenamiento
+    capturando_entrenamiento = True
+    buffer_datos_entrenamiento = []
+    return jsonify({ 'capturando': True, 'mensaje': 'Captura iniciada.' })
+
+@app.route('/api/detener_captura_entrenamiento', methods=['POST'])
+def detener_captura():
+    global capturando_entrenamiento
+    capturando_entrenamiento = False
+    return jsonify({ 'capturando': False, 'mensaje': 'Captura detenida.' })
+
+# --- Guardar muestras en CSV con referencias ---
+@app.route('/api/guardar_muestra_entrenamiento', methods=['POST'])
+def guardar_muestra():
+    global buffer_datos_entrenamiento
+
+    if not buffer_datos_entrenamiento:
+        return jsonify({ 'error': 'No hay datos de entrenamiento en buffer.' })
+
+    data = request.get_json()
+    pas_ref = data.get('pas_referencia')
+    pad_ref = data.get('pad_referencia')
+    hr_ref = data.get('hr_referencia')
+
+    if pas_ref is None or pad_ref is None or hr_ref is None:
+        return jsonify({ 'error': 'Faltan valores de referencia.' })
+
+    file_exists = os.path.isfile(csv_file)
+    with open(csv_file, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(['hr_promedio_sensor','spo2_promedio_sensor','ir_mean_filtrado','red_mean_filtrado','hr_referencia','pas_referencia','pad_referencia','timestamp_captura'])
+
+        for row in buffer_datos_entrenamiento[:NUM_MUESTRAS_ENTRENAMIENTO]:
+            writer.writerow([
+                row['hr_promedio_sensor'],
+                row['spo2_promedio_sensor'],
+                row['ir_mean_filtrado'],
+                row['red_mean_filtrado'],
+                hr_ref,
+                pas_ref,
+                pad_ref,
+                row['timestamp_captura']
+            ])
+
+    buffer_datos_entrenamiento = []
+    return jsonify({ 'mensaje': f'{NUM_MUESTRAS_ENTRENAMIENTO} muestras guardadas con éxito en CSV.' })
+
+# --- Última estimación simulada para index.html ---
+@app.route('/api/ultima_estimacion', methods=['GET'])
+def ultima_estimacion():
+    return jsonify({
+        'sys': 125,
+        'dia': 82,
+        'spo2': 97,
+        'hr': 75,
+        'nivel': 'Normal',
+        'timestamp': datetime.utcnow().isoformat(),
+        'modo_autorizado': autorizado_general
+    })
+
+# --- Mediciones simuladas para tabla Railway ---
+@app.route('/api/ultimas_mediciones', methods=['GET'])
+def mediciones():
+    return jsonify([
+        { 'id': 1, 'id_paciente': 1, 'sys': 130, 'dia': 85, 'nivel': 'HT1' },
+        { 'id': 2, 'id_paciente': 1, 'sys': 120, 'dia': 78, 'nivel': 'Normal' },
+        { 'id': 3, 'id_paciente': 1, 'sys': 140, 'dia': 90, 'nivel': 'HT2' }
+    ])
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
