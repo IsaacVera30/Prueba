@@ -5,153 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Control - Monitor de PA</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-
-        :root {
-            --primary-color: #3f51b5;
-            --secondary-color: #f50057;
-            --success-color: #4CAF50;
-            --warning-color: #ff9800;
-            --light-bg: #f4f7f6;
-            --card-bg: #ffffff;
-            --text-color: #333;
-            --text-light: #666;
-            --border-color: #e0e0e0;
-            --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-        }
-
-        body {
-            font-family: 'Roboto', sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: var(--light-bg);
-            color: var(--text-color);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 20px;
-        }
-
-        .main-title {
-            font-size: 2.5em;
+        /* estilos existentes */
+        .registro-contador {
+            font-size: 1.2em;
+            font-weight: bold;
             color: var(--primary-color);
-            font-weight: 700;
-        }
-
-        .container {
-            background-color: var(--card-bg);
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            width: 95%;
-            max-width: 800px;
-            text-align: center;
-        }
-
-        h2 {
-            font-size: 1.5em;
-            color: var(--primary-color);
-            margin-top: 0;
-            padding-bottom: 10px;
-            border-bottom: 2px solid var(--border-color);
-        }
-
-        .data-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            text-align: left;
-            margin-top: 20px;
-        }
-
-        .data-item {
-            background: var(--light-bg);
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 5px solid var(--primary-color);
-        }
-
-        .data-item strong {
-            display: block;
-            color: var(--text-light);
-            margin-bottom: 5px;
-            font-size: 0.9em;
-            text-transform: uppercase;
-        }
-
-        .data-item span {
-            font-size: 1.6em;
-            font-weight: 700;
-            color: var(--primary-color);
+            margin: 10px auto 0;
         }
     </style>
 </head>
 <body>
-
     <h1 class="main-title">Panel de Control del Monitor de PA</h1>
 
     <div class="container">
-        <h2>Datos Recibidos del Sensor</h2>
-        <div class="data-grid">
-            <div class="data-item"><strong>HR SENSOR</strong><span id="hrSensorVal">---</span></div>
-            <div class="data-item"><strong>SpO2 SENSOR</strong><span id="spo2SensorVal">---</span></div>
-            <div class="data-item"><strong>IR</strong><span id="irVal">---</span></div>
-            <div class="data-item"><strong>RED</strong><span id="redVal">---</span></div>
+        <h2>Estado y Controles</h2>
+        <div id="auth-status-display" class="status-display">Cargando...</div>
+        <button id="toggleAuthButton">Cargando...</button>
+        <p id="message-area" class="message-area"></p>
+
+        <div class="training-controls" id="training-capture-section" style="display: none;">
+             <h2>Captura para Muestra de Entrenamiento ML</h2>
+             <div id="captura-status-display" class="status-display">Captura Inactiva</div>
+             <button id="toggleTrainingCaptureButton">Iniciar Captura</button>
+             <div class="form-group">
+                <div>
+                    <label for="pasRef">PAS Ref:</label>
+                    <input type="number" id="pasRef" placeholder="120">
+                </div>
+                <div>
+                    <label for="padRef">PAD Ref:</label>
+                    <input type="number" id="padRef" placeholder="80">
+                </div>
+                <div>
+                    <label for="hrRef">Pulso Ref:</label>
+                    <input type="number" id="hrRef" placeholder="75">
+                </div>
+             </div>
+             <button id="saveTrainingSampleButton" disabled>Guardar Muestra de Entrenamiento</button>
+             <p class="registro-contador">Muestras registradas: <span id="registroCount">0 / 15</span></p>
+             <p style="font-size: 0.9em; color: var(--text-light);"><strong>Instrucciones:</strong> 1. Inicie la captura. 2. Tome la medición. 3. Detenga la captura. 4. Ingrese los 3 valores de referencia. 5. Guarde.</p>
         </div>
     </div>
 
-    <div class="container">
-        <h2>Estimaciones ML (Presión Arterial)</h2>
-        <div class="data-grid">
-            <div class="data-item"><strong>PAS (SYS)</strong><span id="sysVal">---</span></div>
-            <div class="data-item"><strong>PAD (DIA)</strong><span id="diaVal">---</span></div>
-            <div class="data-item"><strong>HR ML</strong><span id="hrMlVal">---</span></div>
-            <div class="data-item"><strong>SpO2 ML</strong><span id="spo2Val">---</span></div>
-            <div class="data-item"><strong>Estado</strong><span id="nivelVal">---</span></div>
-            <div class="data-item"><strong>Timestamp</strong><span id="timestampVal">---</span></div>
-        </div>
-    </div>
-
-    <div class="container">
-        <h2>Últimas 20 Mediciones Guardadas (Railway)</h2>
-        <table id="medicionesTable">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>ID Paciente</th>
-                    <th>PAS</th>
-                    <th>PAD</th>
-                    <th>Nivel</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
-            </tbody>
-        </table>
-    </div>
+    <!-- resto del HTML sin cambios -->
 
     <script>
-        function actualizarPanel() {
-            fetch('/api/ultima_estimacion')
-                .then(r => r.json())
+        // Agrega esta función al final del script de DOMContentLoaded
+        function actualizarContadorRegistro() {
+            fetch('/api/contador_captura')
+                .then(res => res.json())
                 .then(data => {
-                    document.getElementById('hrSensorVal').textContent = data.hr_sensor || '---';
-                    document.getElementById('spo2SensorVal').textContent = data.spo2_sensor || '---';
-                    document.getElementById('irVal').textContent = data.ir || '---';
-                    document.getElementById('redVal').textContent = data.red || '---';
-
-                    document.getElementById('sysVal').textContent = data.sys || '---';
-                    document.getElementById('diaVal').textContent = data.dia || '---';
-                    document.getElementById('hrMlVal').textContent = data.hr || '---';
-                    document.getElementById('spo2Val').textContent = data.spo2 || '---';
-                    document.getElementById('nivelVal').textContent = data.nivel || '---';
-                    document.getElementById('timestampVal').textContent = data.timestamp || '---';
-                });
+                    const span = document.getElementById('registroCount');
+                    span.textContent = `${data.count || 0} / 15`;
+                })
+                .catch(err => console.warn('No se pudo actualizar contador', err));
         }
 
-        setInterval(actualizarPanel, 5000);
-        actualizarPanel();
+        setInterval(actualizarContadorRegistro, 2000);
     </script>
-
 </body>
 </html>
