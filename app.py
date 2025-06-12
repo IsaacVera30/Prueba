@@ -5,6 +5,11 @@ import os
 import time
 from datetime import datetime
 
+
+from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask_cors import CORS
+
+app = Flask(__name__, static_folder='static', template_folder='templates')
 app = Flask(__name__)
 CORS(app)
 
@@ -16,6 +21,12 @@ NUM_MUESTRAS_ENTRENAMIENTO = 15
 
 # Ruta del archivo CSV
 csv_file = 'datos_entrenamiento.csv'
+
+# buscará templates/index.html y lo servirá al visitar la raíz /
+@app.route("/")
+def index():
+    return render_template("index.html")
+
 
 # --- Endpoint para recibir datos desde el ESP32 ---
 @app.route('/api/presion', methods=['POST'])
