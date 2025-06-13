@@ -240,6 +240,36 @@ def get_ultimas_mediciones_db():
         if conn.is_connected(): conn.close()
         return jsonify([])
 
+@app.route("/api/registros/borrar_todo", methods=['DELETE'])
+def borrar_todos_los_registros():
+    """
+    Este endpoint borra TODOS los registros de la tabla 'mediciones'.
+    Usa TRUNCATE TABLE que es más eficiente y resetea el contador de IDs.
+    """
+    conn = conectar_db()
+    if not conn:
+        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
+    
+    cursor = conn.cursor()
+    query = "TRUNCATE TABLE mediciones"
+    
+    try:
+        cursor.execute(query)
+        conn.commit()
+        print("✅ Tabla 'mediciones' ha sido vaciada por petición de API.")
+        
+        # Notifica al panel web para que actualice la tabla y la muestre vacía
+        socketio.emit('new_record_saved') 
+        
+        return jsonify({"mensaje": "Todos los registros han sido eliminados exitosamente."}), 200
+    except Exception as e:
+        print(f"❌ Error al vaciar la tabla: {e}")
+        conn.rollback()
+        return jsonify({"error": "Error al intentar borrar los registros", "detalle": str(e)}), 500
+    finally:
+        if conn.is_connected():
+            conn.close()
+
 ### --- PUNTO DE ENTRADA --- ###
 if __name__ == "__main__":
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
