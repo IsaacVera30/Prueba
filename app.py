@@ -1,3 +1,8 @@
+# AÑADIDO: Líneas para activar eventlet ANTES de todo lo demás. Es crucial que estén primero.
+import eventlet
+eventlet.monkey_patch()
+
+# El resto de tus imports van DESPUÉS de esas dos líneas
 from flask import Flask, request, jsonify, render_template
 from flask_socketio import SocketIO
 import pandas as pd
@@ -66,26 +71,20 @@ def home():
 
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
-    print("--- 1. Recibida petición en /api/presion ---")
     if not modelo_sys or not modelo_dia:
-        print("❌ ERROR: Modelos no disponibles.")
         return jsonify({"error": "Modelos no disponibles en el servidor"}), 503
 
     try:
         data = request.get_json()
-        print(f"--- 2. Datos JSON recibidos: {data} ---")
-
         hr_promedio = float(data["hr_promedio"])
         ir_val = float(data["ir"])
         red_val = float(data["red"])
         id_paciente = int(data.get("id_paciente", 1))
-        print("--- 3. Datos parseados correctamente. ---")
 
         entrada_df = pd.DataFrame([[hr_promedio, ir_val, red_val]], columns=['HR', 'IR', 'RED'])
         pas_estimada = modelo_sys.predict(entrada_df)[0]
         pad_estimada = modelo_dia.predict(entrada_df)[0]
         nivel_presion = clasificar_nivel_presion(pas_estimada, pad_estimada)
-        print("--- 4. Predicción ML realizada exitosamente. ---")
 
         datos_para_panel = {
             "hr_crudo": data.get("hr_crudo"), "hr_promedio": f"{hr_promedio:.0f}",
@@ -94,9 +93,7 @@ def api_procesar_presion():
             "hr_ml": f"{hr_promedio:.0f}", "spo2_ml": data.get("spo2_sensor"), "estado": nivel_presion
         }
         
-        print(f"--- 5. Emitiendo datos al panel vía Socket.IO: {datos_para_panel} ---")
         socketio.emit('update_data', datos_para_panel)
-        print("--- 6. Emisión completada. ---")
 
         if autorizado:
             guardar_medicion_mysql(id_paciente, pas_estimada, pad_estimada, nivel_presion)
@@ -106,12 +103,11 @@ def api_procesar_presion():
             "sys": pas_estimada, "dia": pad_estimada, "hr": hr_promedio,
             "spo2": float(data.get("spo2_sensor", 0)), "nivel": nivel_presion
         }
-        print("--- 7. Enviando respuesta al dispositivo. Fin del proceso. ---")
         return jsonify(respuesta_para_dispositivo), 200
 
     except Exception as e:
         print(f"❌❌❌ ERROR CATASTRÓFICO en /api/presion: {e} ❌❌❌")
-        traceback.print_exc() # Imprime el error completo en los logs
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
@@ -146,7 +142,7 @@ def get_ultimas_mediciones_db():
         return jsonify([])
 
 if __name__ == "__main__":
-    print("Iniciando servidor Flask con SocketIO...")
-    # El puerto se toma de la variable de entorno PORT, común en servicios como Render
+    print("Iniciando servidor Flask con SocketIO y Eventlet...")
     port = int(os.environ.get("PORT", 10000))
+    # Esta línea es usada para desarrollo local, gunicorn la ignora en producción pero es buena práctica tenerla
     socketio.run(app, host='0.0.0.0', port=port)
