@@ -25,7 +25,6 @@
 <body>
     <h1>Panel de Monitoreo de Salud</h1>
 
-    <!-- Sección 1: Lecturas del Sensor -->
     <div class="container">
         <h2>Lecturas del Sensor</h2>
         <p>HR Crudo: <strong id="hr_crudo">---</strong></p>
@@ -35,7 +34,6 @@
         <p>RED: <strong id="red">---</strong></p>
     </div>
 
-    <!-- Sección 2: Predicción ML -->
     <div class="container">
         <h2>Predicción ML</h2>
         <p>SYS ML: <strong id="sys_ml">---</strong></p>
@@ -45,7 +43,6 @@
         <p>Estado: <strong id="estado">---</strong></p>
     </div>
 
-    <!-- Sección 3: Entrenamiento ML -->
     <div class="container">
         <h2>Entrenamiento ML</h2>
         <p>Este modo permite capturar un segmento de datos del sensor para generar una nueva fila de entrenamiento, asociándola a una medición de referencia de un tensiómetro real.</p>
@@ -64,13 +61,11 @@
             <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive</button>
         </div>
     </div>
-    
-    <!-- Sección 4: Últimos 20 datos registrados -->
+
     <div class="container">
         <h2>Últimos 20 datos registrados</h2>
         <table id="medicionesTable">
             <thead>
-                <!-- CORREGIDO: Cabeceras coinciden con tu DB -->
                 <tr>
                     <th>#</th>
                     <th>PACIENTE ID</th>
@@ -80,7 +75,6 @@
                 </tr>
             </thead>
             <tbody>
-                <!-- CORREGIDO: colspan es 5 -->
                 <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
             </tbody>
         </table>
@@ -95,7 +89,6 @@
                 sys_ml: document.getElementById('sys_ml'), dia_ml: document.getElementById('dia_ml'),
                 hr_ml: document.getElementById('hr_ml'), spo2_ml: document.getElementById('spo2_ml'),
                 estado: document.getElementById('estado'),
-                
                 authTrainingBtn: document.getElementById('authTrainingBtn'),
                 trainingSubsection: document.getElementById('training-subsection'),
                 toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
@@ -104,7 +97,6 @@
                 sysRef: document.getElementById('sysRef'),
                 diaRef: document.getElementById('diaRef'),
                 hrRef: document.getElementById('hrRef'),
-                
                 medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
             };
 
@@ -115,9 +107,13 @@
             socket.on('update_data', function(data) {
                 for (const key in data) { if (ui[key] && ui[key].nodeName) { ui[key].textContent = data[key]; } }
             });
+
             socket.on('new_record_saved', () => actualizarTablaMediciones());
+            
             socket.on('capture_count_update', function(data) {
-                if (isCapturing) { ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`; }
+                if (isCapturing) {
+                    ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`;
+                }
             });
 
             function updateTrainingUI() {
@@ -147,13 +143,19 @@
                 fetch(endpoint, { method: 'POST' })
                     .then(res => res.json())
                     .then(data => {
-                        if (!isCapturing) { ui.captureStatus.textContent = `Captura Detenida. ${data.muestras || 0} muestras listas. Ingrese valores.`; }
+                        if (!isCapturing) {
+                            ui.captureStatus.textContent = `Captura Detenida. ${data.muestras || 0} muestras listas. Ingrese valores.`;
+                        }
                     });
                 updateTrainingUI();
             });
 
             ui.saveSampleBtn.addEventListener('click', () => {
-                const refData = { sys_ref: ui.sysRef.value, dia_ref: ui.diaRef.value, hr_ref: ui.hrRef.value };
+                const refData = {
+                    sys_ref: ui.sysRef.value,
+                    dia_ref: ui.diaRef.value,
+                    hr_ref: ui.hrRef.value
+                };
                 if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
                     alert("Por favor, ingrese todos los valores de referencia."); return;
                 }
@@ -177,7 +179,6 @@
                     if (data && data.length > 0) {
                         data.forEach(med => {
                             let row = tbody.insertRow();
-                            // CORREGIDO: Solo se usan las 5 columnas de tu DB
                             row.insertCell().textContent = med.id;
                             row.insertCell().textContent = med.id_paciente;
                             row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
@@ -185,7 +186,6 @@
                             row.insertCell().textContent = med.nivel;
                         });
                     } else {
-                        // CORREGIDO: colspan es 5
                         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
                     }
                 });
