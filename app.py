@@ -1,164 +1,170 @@
-from flask import Flask, render_template, request, jsonify
-from flask_cors import CORS
-import mysql.connector
-import csv
-import os
-import joblib
-import datetime
-import numpy as np
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
+# app.py final: combinado con funciones nuevas y estructura original estable
+
+from flask import Flask, request, jsonify, render_template
 import pandas as pd
+import joblib
+import numpy as np 
+import os
+import csv
+from datetime import datetime
+import mysql.connector
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from scipy.signal import butter, filtfilt
 
 app = Flask(__name__)
-CORS(app)
 
-# Variables globales
-lecturas_sensor = []
-registro_activo = False
-registros_requeridos = 15
-contador_registros = 0
-datos_referencia = {}
-ultimos_datos = []
+# --- Carga de Modelos de Machine Learning ---
+MODEL_SYS_PATH = "modelo_sys.pkl"
+MODEL_DIA_PATH = "modelo_dia.pkl"
+modelo_sys = joblib.load(MODEL_SYS_PATH) if os.path.exists(MODEL_SYS_PATH) else None
+modelo_dia = joblib.load(MODEL_DIA_PATH) if os.path.exists(MODEL_DIA_PATH) else None
 
-# Conexión MySQL
-def conectar_mysql():
-    return mysql.connector.connect(
-        host=os.environ.get("DB_HOST"),
-        user=os.environ.get("DB_USER"),
-        password=os.environ.get("DB_PASSWORD"),
-        database=os.environ.get("DB_NAME")
-    )
+# --- Variables Globales ---
+autorizado = False
+capturando_entrenamiento = False
+buffer_datos_entrenamiento = []
+ultima_estimacion = {"sys": "---", "dia": "---", "spo2": "---", "hr": "---", "nivel": "---", "timestamp": "---"}
+ventana_ir, ventana_red = [], []
+MUESTRAS_SPO2 = 10
 
-# Cargar modelos ML
-modelo_sys = joblib.load("modelo_sys.pkl")
-modelo_dia = joblib.load("modelo_dia.pkl")
+# --- Config DB y Drive ---
+DB_CONFIG = {
+    'host': os.environ.get('DB_HOST', os.environ.get("MYSQLHOST")),
+    'user': os.environ.get('DB_USER', os.environ.get("MYSQLUSER")),
+    'password': os.environ.get('DB_PASSWORD', os.environ.get("MYSQLPASSWORD")),
+    'database': os.environ.get('DB_NAME', os.environ.get("MYSQLDATABASE")),
+    'port': int(os.environ.get('DB_PORT', os.environ.get("MYSQLPORT", "3306")))
+}
 
-# Ruta principal
-@app.route('/')
-def index():
-    return render_template('index.html')
+FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', "")
+CSV_FILENAME = "registro_sensor_entrenamiento.csv"
+KEY_FILE_LOCATION = 'service_account.json'
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
-# Obtener cantidad de registros actuales
-@app.route('/api/registro_count')
-def registro_count():
-    return jsonify({"count": contador_registros, "total": registros_requeridos})
+# --- Funciones Auxiliares ---
+def filtrar_senal_ppg(senal):
+    b, a = butter(4, [0.5 / 25, 5.0 / 25], btype='band')
+    return filtfilt(b, a, senal)
 
-# Activar registro
-@app.route('/api/activar_registro', methods=['POST'])
-def activar_registro():
-    global registro_activo, contador_registros, lecturas_sensor
-    registro_activo = True
-    contador_registros = 0
-    lecturas_sensor = []
-    return jsonify({"mensaje": "Registro activado"})
-
-# Guardar datos de referencia
-@app.route('/api/referencia', methods=['POST'])
-def guardar_referencia():
-    global datos_referencia
-    datos = request.json
-    datos_referencia = datos
-    return jsonify({"mensaje": "Datos de referencia guardados"})
-
-# Recibir datos del ESP32
-@app.route('/api/presion', methods=['POST'])
-def recibir_presion():
-    global lecturas_sensor, contador_registros, registro_activo, datos_referencia, ultimos_datos
-
-    data = request.get_json()
-    hr_crudo = data.get("HR_CRUDO")
-    hr_avg = data.get("HR_PROMEDIO_SENSOR")
-    spo2 = data.get("SpO2_SENSOR")
-    ir = data.get("IR")
-    red = data.get("RED")
-
-    # Predicciones ML
-    entrada = np.array([[hr_avg, spo2, ir, red]])
-    sys_ml = modelo_sys.predict(entrada)[0]
-    dia_ml = modelo_dia.predict(entrada)[0]
-    hr_ml = hr_avg
-    spo2_ml = spo2
-    estado = "Normal" if sys_ml < 130 and dia_ml < 85 else "Alerta"
-
-    # Datos actuales
-    datos_actuales = {
-        "HR_CRUDO": hr_crudo,
-        "HR_PROMEDIO_SENSOR": hr_avg,
-        "SpO2_SENSOR": spo2,
-        "IR": ir,
-        "RED": red,
-        "SYS_ML": sys_ml,
-        "DIA_ML": dia_ml,
-        "HR_ML": hr_ml,
-        "SpO2_ML": spo2_ml,
-        "ESTADO": estado
+def extraer_caracteristicas_ppg(segmento_ir, segmento_red, hr_promedio, spo2_promedio):
+    ir = filtrar_senal_ppg(segmento_ir)
+    red = filtrar_senal_ppg(segmento_red)
+    return {
+        "hr_promedio_sensor": round(hr_promedio, 2),
+        "spo2_promedio_sensor": round(spo2_promedio, 2),
+        "ir_mean_filtrado": round(np.mean(ir), 2),
+        "red_mean_filtrado": round(np.mean(red), 2),
+        "ir_std_filtrado": round(np.std(ir), 2),
+        "red_std_filtrado": round(np.std(red), 2)
     }
 
-    ultimos_datos.append(datos_actuales)
+def calcular_spo2(ir_list, red_list):
+    if len(ir_list) < MUESTRAS_SPO2: return 0.0
+    ir, red = np.array(ir_list[-MUESTRAS_SPO2:]), np.array(red_list[-MUESTRAS_SPO2:])
+    try:
+        ratio = (np.mean(np.abs(red - np.mean(red))) / np.mean(red)) / \
+                (np.mean(np.abs(ir - np.mean(ir))) / np.mean(ir))
+        return round(max(70.0, min(100.0, 110 - 25 * ratio)), 1)
+    except: return 0.0
 
-    if registro_activo and contador_registros < registros_requeridos:
-        fila = [
-            hr_crudo, hr_avg, spo2, ir, red,
-            datos_referencia.get("SYS_REFERENCIA"),
-            datos_referencia.get("DIA_REFERENCIA"),
-            datos_referencia.get("HR_REFERENCIA")
-        ]
-        lecturas_sensor.append(fila)
-        contador_registros += 1
+def clasificar_nivel(sys, dia):
+    if sys > 180 or dia > 120: return "HT Crisis"
+    elif sys >= 140 or dia >= 90: return "HT2"
+    elif sys >= 130 or dia >= 80: return "HT1"
+    elif sys >= 120 and dia < 80: return "Elevada"
+    elif sys < 120 and dia < 80: return "Normal"
+    return "Revisar"
 
-        if contador_registros == registros_requeridos:
-            guardar_csv()
-            registro_activo = False
-            lecturas_sensor = []
-            contador_registros = 0
+def conectar_db():
+    return mysql.connector.connect(**DB_CONFIG)
 
-    return jsonify({"mensaje": "Datos procesados correctamente"})
+def guardar_mysql(id_paciente, sys, dia, nivel):
+    conn = conectar_db(); cur = conn.cursor()
+    cur.execute("INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s,%s,%s,%s)", (id_paciente, sys, dia, nivel))
+    conn.commit(); cur.close(); conn.close()
 
-# Guardar CSV local y subir a Google Drive
-def guardar_csv():
-    fecha = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"registro_entrenamiento_{fecha}.csv"
-
-    with open(nombre_archivo, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["HR_CRUDO", "HR_PROMEDIO_SENSOR", "SpO2_SENSOR", "IR", "RED", "SYS_REFERENCIA", "DIA_REFERENCIA", "HR_REFERENCIA"])
-        writer.writerows(lecturas_sensor)
-
-    subir_a_drive(nombre_archivo)
-
-# Subir a Google Drive
-def subir_a_drive(nombre_archivo):
-    SCOPES = ['https://www.googleapis.com/auth/drive.file']
-    SERVICE_ACCOUNT_FILE = 'credenciales_google.json'
-
-    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+def subir_a_drive(ruta, nombre):
+    creds = service_account.Credentials.from_service_account_file(KEY_FILE_LOCATION, scopes=SCOPES)
     service = build('drive', 'v3', credentials=creds)
-
-    file_metadata = {'name': nombre_archivo, 'parents': [os.environ.get("DRIVE_FOLDER_ID")]}
-    media = MediaFileUpload(nombre_archivo, mimetype='text/csv')
+    file_metadata = {'name': nombre, 'parents': [FOLDER_ID]}
+    media = MediaFileUpload(ruta, mimetype='text/csv')
     service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-# Ruta para obtener el último valor en tiempo real
-@app.route('/api/ultimos_valores', methods=['GET'])
-def obtener_ultimos_valores():
-    if ultimos_datos:
-        return jsonify(ultimos_datos[-1])
-    return jsonify({'mensaje': 'No hay datos disponibles'}), 404
+# --- Rutas ---
+@app.route("/")
+def index():
+    return render_template("index.html", autorizado=autorizado, estimacion=ultima_estimacion)
 
-# Ruta para obtener los últimos 20 registros de la base de datos
-@app.route('/api/ultimos_datos', methods=['GET'])
-def obtener_ultimos_datos():
-    try:
-        conn = conectar_mysql()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM presion ORDER BY id DESC LIMIT 20")
-        resultados = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify(resultados)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.route("/api/presion", methods=["POST"])
+def presion():
+    global ultima_estimacion, ventana_ir, ventana_red
+    d = request.get_json()
+    hr, ir, red = int(d['hr']), int(d['ir']), int(d['red'])
+    ventana_ir.append(ir); ventana_red.append(red)
+    if len(ventana_ir) > MUESTRAS_SPO2: ventana_ir.pop(0); ventana_red.pop(0)
+    spo2 = calcular_spo2(ventana_ir, ventana_red)
+    sys, dia = modelo_sys.predict([[hr, spo2]])[0], modelo_dia.predict([[hr, spo2]])[0]
+    nivel = clasificar_nivel(sys, dia)
+    ultima_estimacion = {
+        "sys": round(sys, 2), "dia": round(dia, 2), "spo2": spo2,
+        "hr": hr, "nivel": nivel, "timestamp": datetime.now().strftime('%H:%M:%S')
+    }
+    if ir > 20000 and red > 15000: guardar_mysql(1, sys, dia, nivel)
+    return jsonify(ultima_estimacion)
+
+@app.route("/api/autorizacion", methods=["POST"])
+def autorizar():
+    global autorizado
+    autorizado = request.get_json().get("autorizado", False)
+    return jsonify({"autorizado": autorizado})
+
+@app.route("/api/iniciar_captura_entrenamiento", methods=["POST"])
+def iniciar():
+    global capturando_entrenamiento, buffer_datos_entrenamiento
+    capturando_entrenamiento = True; buffer_datos_entrenamiento = []
+    return jsonify({"estado": "iniciado"})
+
+@app.route("/api/detener_captura_entrenamiento", methods=["POST"])
+def detener():
+    global capturando_entrenamiento
+    capturando_entrenamiento = False
+    return jsonify({"estado": "detenido"})
+
+@app.route("/api/guardar_muestra_entrenamiento", methods=["POST"])
+def guardar_csv():
+    global buffer_datos_entrenamiento
+    ref = request.get_json()
+    if not buffer_datos_entrenamiento: return jsonify({"error": "sin datos"})
+    hrs = [r['hr'] for r in buffer_datos_entrenamiento]
+    irs = [r['ir'] for r in buffer_datos_entrenamiento]
+    reds = [r['red'] for r in buffer_datos_entrenamiento]
+    hr_avg = np.mean(hrs); spo2_avg = calcular_spo2(irs, reds)
+    feat = extraer_caracteristicas_ppg(irs, reds, hr_avg, spo2_avg)
+    with open(CSV_FILENAME, 'a', newline='') as f:
+        w = csv.writer(f)
+        if f.tell() == 0: w.writerow(list(feat.keys()) + ["hr_referencia", "pas_referencia", "pad_referencia", "timestamp"])
+        w.writerow(list(feat.values()) + [ref['hr_referencia'], ref['pas_referencia'], ref['pad_referencia'], datetime.now()])
+    subir_a_drive(CSV_FILENAME, CSV_FILENAME)
+    buffer_datos_entrenamiento = []
+    return jsonify({"msg": "guardado en csv"})
+
+@app.route("/api/ultimos_valores", methods=["GET"])
+def ultimos():
+    conn = conectar_db(); cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM mediciones ORDER BY id DESC LIMIT 20")
+    r = cur.fetchall(); cur.close(); conn.close()
+    return jsonify(r)
+
+@app.route("/api/ultima_estimacion", methods=["GET"])
+def estimacion():
+    return jsonify(ultima_estimacion)
+
+@app.route("/api/registro_count")
+def count():
+    return jsonify({"registros": len(buffer_datos_entrenamiento)})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
