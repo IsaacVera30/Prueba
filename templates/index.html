@@ -3,157 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Control - Monitor de PA</title>
+    <title>Panel de Monitoreo de Salud</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-        :root { /* ... tus variables de color ... */ }
-        body { font-family: 'Roboto', sans-serif; /* ... etc ... */ }
-        /* ... Todos tus demás estilos ... */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 20px; background-color: #f7f7f7; }
+        h1, h2 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px;}
+        .container { background-color: white; border: 1px solid #e0e0e0; padding: 5px 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        p { font-size: 1.1em; color: #555; line-height: 1.6; }
+        strong { color: #000; font-weight: 600; float: right; }
+        button { padding: 10px 15px; border-radius: 5px; border: 1px solid #ccc; color: #333; background-color: #fff; cursor: pointer; font-size: 1em; margin-right: 10px; }
+        button:hover { background-color: #f0f0f0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px;}
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; }
+        .auth-display { margin-top: 10px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1 class="main-title">Panel de Control del Monitor de PA</h1>
+    <h1>Panel de Monitoreo de Salud</h1>
 
     <div class="container">
-        <h2>Estado y Controles</h2>
-        <div id="auth-status-display" class="status-display">Cargando...</div>
-        <button id="toggleAuthButton">Cargando...</button>
+        <h2>Lecturas del Sensor</h2>
+        <p>HR Crudo: <strong id="hr_crudo">---</strong></p>
+        <p>HR PROMEDIO SENSOR: <strong id="hr_promedio">---</strong></p>
+        <p>SpO2 SENSOR: <strong id="spo2_sensor">---</strong></p>
+        <p>IR: <strong id="ir_val">---</strong></p>
+        <p>RED: <strong id="red_val">---</strong></p>
     </div>
 
     <div class="container">
-        <h2>Última Estimación Recibida (Tiempo Real)</h2>
-        <div class="data-grid">
-            <div class="data-item"><strong>PAS (Sistólica)</strong> <span id="sysVal">---</span> mmHg</div>
-            <div class="data-item"><strong>PAD (Diastólica)</strong> <span id="diaVal">---</span> mmHg</div>
-            <div class="data-item"><strong>SpO2</strong> <span id="spo2Val">---</span> %</div>
-            <div class="data-item"><strong>HR</strong> <span id="hrVal">---</span> bpm</div>
-            <div class="data-item"><strong>Nivel</strong> <span id="nivelVal">---</span></div>
-            <div class="data-item"><strong>Timestamp</strong> <span id="timestampVal">---</span></div>
-        </div>
+        <h2>Predicción ML</h2>
+        <p>SYS ML: <strong id="sys_ml">---</strong></p>
+        <p>DIA ML: <strong id="dia_ml">---</strong></p>
+        <p>HR ML: <strong id="hr_ml">---</strong></p>
+        <p>SpO2 ML: <strong id="spo2_ml">---</strong></p>
+        <p>Estado: <strong id="estado_ml">---</strong></p>
     </div>
 
     <div class="container">
-        <h2>Últimas 20 Mediciones Guardadas</h2>
+        <button id="toggleAuthButton">Autorizar Guardado</button>
+        <div id="auth-status-display" class="auth-display">Estado: No Autorizado</div>
+    </div>
+
+    <div class="container">
+        <h2>Últimos 20 datos registrados</h2>
         <table id="medicionesTable">
             <thead>
-                <tr><th>ID</th><th>Paciente</th><th>PAS</th><th>PAD</th><th>HR</th><th>SpO2</th><th>Nivel</th></tr>
+                <tr><th>ID</th><th>SYS</th><th>DIA</th><th>Nivel</th></tr>
             </thead>
             <tbody>
-                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
+                <tr><td colspan="4" style="text-align:center;">Cargando...</td></tr>
             </tbody>
         </table>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // --- Referencias a Elementos UI ---
             const ui = {
+                hr_crudo: document.getElementById('hr_crudo'),
+                hr_promedio: document.getElementById('hr_promedio'),
+                spo2_sensor: document.getElementById('spo2_sensor'),
+                ir_val: document.getElementById('ir_val'),
+                red_val: document.getElementById('red_val'),
+                sys_ml: document.getElementById('sys_ml'),
+                dia_ml: document.getElementById('dia_ml'),
+                hr_ml: document.getElementById('hr_ml'),
+                spo2_ml: document.getElementById('spo2_ml'),
+                estado_ml: document.getElementById('estado_ml'),
+                medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody'),
                 authButton: document.getElementById('toggleAuthButton'),
-                authStatus: document.getElementById('auth-status-display'),
-                sysVal: document.getElementById('sysVal'),
-                diaVal: document.getElementById('diaVal'),
-                spo2Val: document.getElementById('spo2Val'),
-                hrVal: document.getElementById('hrVal'),
-                nivelVal: document.getElementById('nivelVal'),
-                timestampVal: document.getElementById('timestampVal'),
-                medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
+                authStatus: document.getElementById('auth-status-display')
             };
-
-            let estadoAutorizadoGeneral = false;
-
-            // --- Conexión con el servidor Socket.IO ---
+            let estadoAutorizado = false;
             const socket = io();
 
-            // --- Escuchadores de Eventos del Servidor ---
-
-            // Se activa cuando el servidor envía una nueva medición
             socket.on('update_data', function(data) {
-                console.log('Datos recibidos:', data);
-                ui.sysVal.textContent = data.sys || '---';
-                ui.diaVal.textContent = data.dia || '---';
-                ui.spo2Val.textContent = data.spo2 || '---';
-                ui.hrVal.textContent = data.hr || '---';
-                ui.nivelVal.textContent = data.nivel || '---';
-                ui.timestampVal.textContent = data.timestamp || '---';
+                for (const key in ui) {
+                    if (data[key] !== undefined && ui[key]) {
+                        ui[key].textContent = data[key];
+                    }
+                }
             });
 
-            // Se activa cuando cambia el estado de autorización en el servidor
-            socket.on('status_update', function(data) {
-                estadoAutorizadoGeneral = data.autorizado;
+            socket.on('new_record_saved', () => actualizarTablaMediciones());
+            socket.on('status_update', (data) => {
+                estadoAutorizado = data.autorizado;
                 actualizarUIAutorizacion();
             });
 
-            // Se activa cuando se guarda un nuevo registro para refrescar la tabla
-            socket.on('new_record_saved', function() {
-                console.log('Nuevo registro guardado, actualizando tabla...');
-                actualizarTablaMediciones();
-            });
-
-
-            // --- Lógica de la Interfaz ---
-
             function actualizarUIAutorizacion() {
-                if (estadoAutorizadoGeneral) {
-                    ui.authButton.textContent = 'Detener Registro en BD';
-                    ui.authButton.className = 'btn-toggle-on';
-                    ui.authStatus.textContent = 'Registro en Base de Datos: AUTORIZADO';
-                    ui.authStatus.className = 'status-display status-autorizado';
-                } else {
-                    ui.authButton.textContent = 'Autorizar Registro en BD';
-                    ui.authButton.className = 'btn-toggle-off';
-                    ui.authStatus.textContent = 'Registro en Base de Datos: DETENIDO';
-                    ui.authStatus.className = 'status-display status-detenido';
-                }
+                ui.authStatus.textContent = `Estado: ${estadoAutorizado ? "Autorizado" : "No Autorizado"}`;
+                ui.authButton.textContent = estadoAutorizado ? "Detener Guardado" : "Autorizar Guardado";
             }
 
-            function toggleAutorizacion() {
+            ui.authButton.addEventListener('click', () => {
                 fetch('/api/autorizacion', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ autorizado: !estadoAutorizadoGeneral }),
-                }).catch(error => console.error('Error al cambiar autorización:', error));
-            }
+                    body: JSON.stringify({ autorizado: !estadoAutorizado })
+                });
+            });
 
             function actualizarTablaMediciones() {
-                fetch('/api/ultimas_mediciones')
-                    .then(response => response.json())
-                    .then(data => {
-                        ui.medicionesTbody.innerHTML = ''; // Limpiar tabla
-                        if (data && data.length > 0) {
-                            data.forEach(med => {
-                                let row = ui.medicionesTbody.insertRow();
-                                row.insertCell().textContent = med.id;
-                                row.insertCell().textContent = med.id_paciente;
-                                row.insertCell().textContent = med.sys;
-                                row.insertCell().textContent = med.dia;
-                                row.insertCell().textContent = med.hr;
-                                row.insertCell().textContent = med.spo2;
-                                row.insertCell().textContent = med.nivel;
-                            });
-                        } else {
+                fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
+                    ui.medicionesTbody.innerHTML = '';
+                    if (data && data.length > 0) {
+                        data.forEach(med => {
                             let row = ui.medicionesTbody.insertRow();
-                            let cell = row.insertCell();
-                            cell.colSpan = 7;
-                            cell.textContent = 'No hay mediciones guardadas.';
-                            cell.style.textAlign = 'center';
-                        }
-                    }).catch(error => console.error('Error al cargar tabla:', error));
-            }
-
-            // --- Inicialización ---
-            ui.authButton.addEventListener('click', toggleAutorizacion);
-
-            // Cargar estado inicial del servidor
-            fetch('/api/autorizacion')
-                .then(response => response.json())
-                .then(data => {
-                    estadoAutorizadoGeneral = data.autorizado;
-                    actualizarUIAutorizacion();
+                            row.insertCell().textContent = med.id;
+                            row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
+                            row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
+                            row.insertCell().textContent = med.nivel;
+                        });
+                    } else {
+                        ui.medicionesTbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No hay datos.</td></tr>';
+                    }
                 });
-
-            // Cargar tabla inicial
+            }
+            fetch('/api/autorizacion').then(r => r.json()).then(d => {
+                estadoAutorizado = d.autorizado;
+                actualizarUIAutorizacion();
+            });
             actualizarTablaMediciones();
         });
     </script>
