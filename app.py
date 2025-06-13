@@ -5,6 +5,7 @@ import joblib
 import os
 import mysql.connector
 from datetime import datetime
+import traceback
 
 app = Flask(__name__)
 socketio = SocketIO(app)
@@ -20,19 +21,25 @@ except Exception as e:
 
 # Configuración de Base de Datos
 DB_CONFIG = {
-    'host': os.environ.get("MYSQLHOST"), 'user': os.environ.get("MYSQLUSER"),
-    'password': os.environ.get("MYSQLPASSWORD"), 'database': os.environ.get("MYSQLDATABASE"),
+    'host': os.environ.get("MYSQLHOST"),
+    'user': os.environ.get("MYSQLUSER"),
+    'password': os.environ.get("MYSQLPASSWORD"),
+    'database': os.environ.get("MYSQLDATABASE"),
     'port': int(os.environ.get("MYSQLPORT", "3306"))
 }
-autorizado = False # Estado para controlar el guardado en BD
+autorizado = False  # Estado para controlar el guardado en BD
 
 def conectar_db():
-    try: return mysql.connector.connect(**DB_CONFIG)
-    except Exception as e: print(f"❌ Error DB: {e}"); return None
+    try:
+        return mysql.connector.connect(**DB_CONFIG)
+    except Exception as e:
+        print(f"❌ Error DB: {e}")
+        return None
 
 def guardar_medicion_mysql(id_paciente, sys, dia, nivel):
     conn = conectar_db()
-    if not conn: return
+    if not conn:
+        return
     cursor = conn.cursor()
     query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
     try:
@@ -41,9 +48,12 @@ def guardar_medicion_mysql(id_paciente, sys, dia, nivel):
     except Exception as e:
         print(f"❌ Error al guardar en MySQL: {e}")
     finally:
-        if conn.is_connected(): conn.close()
+        if conn.is_connected():
+            conn.close()
 
 def clasificar_nivel_presion(pas, pad):
+    if pas is None or pad is None:
+        return "N/A"
     if pas > 180 or pad > 120: return "HT Crisis"
     if pas >= 140 or pad >= 90: return "HT2"
     if (pas >= 130 and pas <= 139) or (pad >= 80 and pad <= 89): return "HT1"
@@ -56,20 +66,26 @@ def home():
 
 @app.route("/api/presion", methods=["POST"])
 def api_procesar_presion():
+    print("--- 1. Recibida petición en /api/presion ---")
     if not modelo_sys or not modelo_dia:
+        print("❌ ERROR: Modelos no disponibles.")
         return jsonify({"error": "Modelos no disponibles en el servidor"}), 503
 
-    data = request.get_json()
     try:
+        data = request.get_json()
+        print(f"--- 2. Datos JSON recibidos: {data} ---")
+
         hr_promedio = float(data["hr_promedio"])
         ir_val = float(data["ir"])
         red_val = float(data["red"])
         id_paciente = int(data.get("id_paciente", 1))
+        print("--- 3. Datos parseados correctamente. ---")
 
         entrada_df = pd.DataFrame([[hr_promedio, ir_val, red_val]], columns=['HR', 'IR', 'RED'])
         pas_estimada = modelo_sys.predict(entrada_df)[0]
         pad_estimada = modelo_dia.predict(entrada_df)[0]
         nivel_presion = clasificar_nivel_presion(pas_estimada, pad_estimada)
+        print("--- 4. Predicción ML realizada exitosamente. ---")
 
         datos_para_panel = {
             "hr_crudo": data.get("hr_crudo"), "hr_promedio": f"{hr_promedio:.0f}",
@@ -77,7 +93,10 @@ def api_procesar_presion():
             "sys_ml": f"{pas_estimada:.2f}", "dia_ml": f"{pad_estimada:.2f}",
             "hr_ml": f"{hr_promedio:.0f}", "spo2_ml": data.get("spo2_sensor"), "estado": nivel_presion
         }
+        
+        print(f"--- 5. Emitiendo datos al panel vía Socket.IO: {datos_para_panel} ---")
         socketio.emit('update_data', datos_para_panel)
+        print("--- 6. Emisión completada. ---")
 
         if autorizado:
             guardar_medicion_mysql(id_paciente, pas_estimada, pad_estimada, nivel_presion)
@@ -87,31 +106,34 @@ def api_procesar_presion():
             "sys": pas_estimada, "dia": pad_estimada, "hr": hr_promedio,
             "spo2": float(data.get("spo2_sensor", 0)), "nivel": nivel_presion
         }
+        print("--- 7. Enviando respuesta al dispositivo. Fin del proceso. ---")
         return jsonify(respuesta_para_dispositivo), 200
 
     except Exception as e:
-        print(f"❌ ERROR en /api/presion: {e}")
+        print(f"❌❌❌ ERROR CATASTRÓFICO en /api/presion: {e} ❌❌❌")
+        traceback.print_exc() # Imprime el error completo en los logs
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/autorizacion", methods=["GET", "POST"])
 def api_control_autorizacion():
     global autorizado
     if request.method == "POST":
         autorizado = request.json.get("autorizado", False)
+        print(f"Estado de autorización cambiado a: {autorizado}")
         socketio.emit('status_update', {"autorizado": autorizado})
     return jsonify({"autorizado": autorizado})
 
 @app.route("/api/ultimas_mediciones")
 def get_ultimas_mediciones_db():
     conn = conectar_db()
-    if not conn: return jsonify([])
+    if not conn:
+        return jsonify([])
     cursor = conn.cursor(dictionary=True)
-    # MODIFICADO: Se añade la columna 'id_paciente' a la consulta SQL
     query = "SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20"
     try:
         cursor.execute(query)
         records = cursor.fetchall()
-        # Convertir todos los valores a string para evitar problemas en el JSON
         for rec in records:
             for key in rec:
                 rec[key] = str(rec[key])
@@ -119,8 +141,12 @@ def get_ultimas_mediciones_db():
         return jsonify(records)
     except Exception as e:
         print(f"❌ Error al leer historial de DB: {e}")
-        if conn.is_connected(): conn.close()
+        if conn.is_connected():
+            conn.close()
         return jsonify([])
 
 if __name__ == "__main__":
-    socketio.run(app, host='0.0.0.0', port=10000)
+    print("Iniciando servidor Flask con SocketIO...")
+    # El puerto se toma de la variable de entorno PORT, común en servicios como Render
+    port = int(os.environ.get("PORT", 10000))
+    socketio.run(app, host='0.0.0.0', port=port)
