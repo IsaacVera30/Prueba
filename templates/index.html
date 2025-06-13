@@ -18,67 +18,136 @@
         table { width: 100%; border-collapse: collapse; margin-top: 15px;}
         th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
         th { background-color: #f8f9fa; }
+        .auth-display { margin-top: 10px; font-weight: bold; }
+        .training-subsection { display: none; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; }
+        .form-group > * { margin-right: 15px; }
     </style>
 </head>
 <body>
     <h1>Panel de Monitoreo de Salud</h1>
 
-    <div class="container"><h2>Lecturas del Sensor</h2></div>
-    <div class="container"><h2>Predicción ML</h2></div>
+    <div class="container">
+        <h2>Lecturas del Sensor</h2>
+        <p>HR Crudo: <strong id="hr_crudo">---</strong></p>
+        <p>HR PROMEDIO SENSOR: <strong id="hr_promedio">---</strong></p>
+        <p>SpO2 SENSOR: <strong id="spo2_sensor">---</strong></p>
+        <p>IR: <strong id="ir">---</strong></p>
+        <p>RED: <strong id="red">---</strong></p>
+    </div>
+
+    <div class="container">
+        <h2>Predicción ML</h2>
+        <p>SYS ML: <strong id="sys_ml">---</strong></p>
+        <p>DIA ML: <strong id="dia_ml">---</strong></p>
+        <p>HR ML: <strong id="hr_ml">---</strong></p>
+        <p>SpO2 ML: <strong id="spo2_ml">---</strong></p>
+        <p>Estado: <strong id="estado">---</strong></p>
+    </div>
 
     <div class="container">
         <h2>Entrenamiento ML</h2>
-        <p>Este modo permite capturar un segmento de datos del sensor para generar una nueva fila de entrenamiento para el modelo, asociándola a una medición de referencia de un tensiómetro real.</p>
+        <p>Este modo permite capturar un segmento de datos del sensor para generar una nueva fila de entrenamiento, asociándola a una medición de referencia de un tensiómetro real.</p>
         
         <button id="authTrainingBtn">1. Autorizar Modo Entrenamiento</button>
         
-        <div id="training-subsection" style="display: none; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-            <button id="toggleCaptureBtn">2. Iniciar Captura</button>
+        <div id="training-subsection" class="training-subsection">
+            <button id="toggleCaptureBtn" disabled>2. Iniciar Captura</button>
             <span id="capture-status" style="font-weight: bold; margin-left: 10px;"></span>
             
             <div style="margin-top: 15px;">
-                <p><strong>Paso 3:</strong> Después de detener la captura, ingrese los valores de referencia del tensiómetro.</p>
-                <label>SYS Referencia: <input type="number" id="sysRef" disabled></label>
-                <label>DIA Referencia: <input type="number" id="diaRef" disabled></label>
-                <label>HR Referencia: <input type="number" id="hrRef" disabled></label>
+                <p><strong>Paso 3:</strong> Después de detener la captura, ingrese los valores de referencia.</p>
+                <div class="form-group">
+                    <label>SYS Referencia: <input type="number" id="sysRef" disabled></label>
+                    <label>DIA Referencia: <input type="number" id="diaRef" disabled></label>
+                    <label>HR Referencia: <input type="number" id="hrRef" disabled></label>
+                </div>
             </div>
             
-            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro de Entrenamiento y Enviar</button>
+            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive</button>
         </div>
     </div>
-
-    <div class="container"><h2>Últimos 20 datos registrados</h2></div>
+    
+    <div class="container">
+        <h2>Últimos 20 datos registrados</h2>
+        <p>Control de guardado en la base de datos MySQL.</p>
+        <button id="toggleDbAuthButton">Autorizar Guardado en DB</button>
+        <div id="db-auth-status-display" class="auth-display">Estado: No Autorizado</div>
+        <table id="medicionesTable">
+            <thead>
+                <tr><th>#</th><th>PACIENTE ID</th><th>SYS</th><th>DIA</th><th>HR</th><th>SpO2</th><th>Nivel</th></tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
+            </tbody>
+        </table>
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // --- Referencias a UI (sin cambios) ---
-            const ui = { /* ... */ };
+            // --- Referencias a Elementos UI ---
+            const ui = {
+                hr_crudo: document.getElementById('hr_crudo'), hr_promedio: document.getElementById('hr_promedio'),
+                spo2_sensor: document.getElementById('spo2_sensor'), ir: document.getElementById('ir'), red: document.getElementById('red'),
+                sys_ml: document.getElementById('sys_ml'), dia_ml: document.getElementById('dia_ml'),
+                hr_ml: document.getElementById('hr_ml'), spo2_ml: document.getElementById('spo2_ml'),
+                estado: document.getElementById('estado'),
+                
+                toggleDbAuthButton: document.getElementById('toggleDbAuthButton'),
+                dbAuthStatus: document.getElementById('db-auth-status-display'),
+                
+                authTrainingBtn: document.getElementById('authTrainingBtn'),
+                trainingSubsection: document.getElementById('training-subsection'),
+                toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
+                saveSampleBtn: document.getElementById('saveSampleBtn'),
+                captureStatus: document.getElementById('capture-status'),
+                sysRef: document.getElementById('sysRef'),
+                diaRef: document.getElementById('diaRef'),
+                hrRef: document.getElementById('hrRef'),
+                
+                medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
+            };
 
             // --- Variables de Estado ---
+            let dbAutorizado = false;
             let trainingAuthorized = false;
             let isCapturing = false;
 
             const socket = io();
-            // --- Lógica de Socket.IO (con el nuevo evento de conteo) ---
-            socket.on('update_data', function(data) { /* ... sin cambios ... */ });
+
+            // --- Lógica de Socket.IO ---
+            socket.on('update_data', function(data) {
+                for (const key in ui) { if (ui[key] && ui[key].nodeName) { ui[key].textContent = data[key]; } }
+            });
             socket.on('new_record_saved', () => actualizarTablaMediciones());
+            
+            socket.on('status_update_db', (data) => {
+                dbAutorizado = data.autorizado;
+                actualizarUIDbAuth();
+            });
+
             socket.on('capture_count_update', function(data) {
                 if (isCapturing) {
                     ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`;
                 }
             });
 
-            // --- Lógica de Entrenamiento ML (Reescrita) ---
+            // --- Lógica de Guardado en DB ---
+            function actualizarUIDbAuth() {
+                ui.dbAuthStatus.textContent = `Estado: ${dbAutorizado ? "Autorizado" : "No Autorizado"}`;
+                ui.toggleDbAuthButton.textContent = dbAutorizado ? "Detener Guardado en DB" : "Autorizar Guardado en DB";
+            }
+            ui.toggleDbAuthButton.addEventListener('click', () => {
+                fetch('/api/autorizacion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autorizado: !dbAutorizado }) });
+            });
+
+            // --- Lógica para Captura de Entrenamiento ---
             function updateTrainingUI() {
-                // Control general de la subsección
                 ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
                 ui.authTrainingBtn.textContent = trainingAuthorized ? '1. Desactivar Modo Entrenamiento' : '1. Autorizar Modo Entrenamiento';
-
-                // Control del botón de captura
+                ui.toggleCaptureBtn.disabled = !trainingAuthorized;
                 ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura' : '2. Iniciar Captura';
                 
-                // Control de los campos de referencia y botón de guardado
                 const canEnterReference = !isCapturing && trainingAuthorized;
                 ui.sysRef.disabled = !canEnterReference;
                 ui.diaRef.disabled = !canEnterReference;
@@ -89,7 +158,6 @@
             ui.authTrainingBtn.addEventListener('click', () => {
                 trainingAuthorized = !trainingAuthorized;
                 if (!trainingAuthorized && isCapturing) {
-                    // Si se desautoriza, se detiene la captura
                     ui.toggleCaptureBtn.click();
                 }
                 updateTrainingUI();
@@ -99,27 +167,58 @@
                 if (!trainingAuthorized) return;
                 isCapturing = !isCapturing;
                 const endpoint = isCapturing ? '/api/start_capture' : '/api/stop_capture';
-                
                 ui.captureStatus.textContent = isCapturing ? 'Capturando... (0 muestras)' : 'Presione "Iniciar Captura"';
-                
                 fetch(endpoint, { method: 'POST' })
                     .then(res => res.json())
                     .then(data => {
                         if (!isCapturing) {
-                            ui.captureStatus.textContent = `Captura Detenida. ${data.muestras || 0} muestras listas.`;
+                            ui.captureStatus.textContent = `Captura Detenida. ${data.muestras || 0} muestras listas. Ingrese valores.`;
                         }
                     });
-                
                 updateTrainingUI();
             });
 
             ui.saveSampleBtn.addEventListener('click', () => {
-                // (La lógica para guardar y enviar se mantiene igual)
+                const refData = { sys_ref: ui.sysRef.value, dia_ref: ui.diaRef.value, hr_ref: ui.hrRef.value };
+                if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
+                    alert("Por favor, ingrese todos los valores de referencia."); return;
+                }
+                fetch('/api/save_training_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(refData)
+                }).then(res => {
+                    if (res.ok) {
+                        alert("Muestra guardada y enviada a Google Drive exitosamente!");
+                        ui.captureStatus.textContent = '';
+                        ui.sysRef.value = ''; ui.diaRef.value = ''; ui.hrRef.value = '';
+                    } else { alert("Error al guardar la muestra."); }
+                });
             });
 
-            // --- Inicialización ---
+            // --- Lógica de Tabla de Historial ---
+            function actualizarTablaMediciones() {
+                fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
+                    const tbody = ui.medicionesTbody;
+                    tbody.innerHTML = '';
+                    if (data && data.length > 0) {
+                        data.forEach(med => {
+                            let row = tbody.insertRow();
+                            row.insertCell().textContent = med.id; row.insertCell().textContent = med.id_paciente;
+                            row.insertCell().textContent = med.sys; row.insertCell().textContent = med.dia;
+                            row.insertCell().textContent = med.hr; row.insertCell().textContent = med.spo2;
+                            row.insertCell().textContent = med.nivel;
+                        });
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay datos.</td></tr>';
+                    }
+                });
+            }
+
+            // --- Inicialización de la Página ---
             updateTrainingUI();
-            // (El resto de la inicialización se mantiene igual)
+            fetch('/api/autorizacion').then(r => r.json()).then(d => { dbAutorizado = d.autorizado; actualizarUIDbAuth(); });
+            actualizarTablaMediciones();
         });
     </script>
 </body>
