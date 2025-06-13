@@ -2,175 +2,160 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Panel de Monitoreo de Salud</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control - Monitor de PA</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f6f6f6;
-        }
-
-        h1 {
-            color: #333;
-        }
-
-        h2 {
-            margin-top: 30px;
-        }
-
-        .section {
-            margin-bottom: 20px;
-        }
-
-        span.valor {
-            color: #007bff;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-
-        table, th, td {
-            border: 1px solid #aaa;
-        }
-
-        th, td {
-            padding: 8px;
-            text-align: center;
-        }
-
-        .green {
-            color: green;
-        }
-
-        .btn {
-            margin: 5px;
-            padding: 8px 16px;
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+        :root { /* ... tus variables de color ... */ }
+        body { font-family: 'Roboto', sans-serif; /* ... etc ... */ }
+        /* ... Todos tus demás estilos ... */
     </style>
 </head>
 <body>
-    <h1>Panel de Monitoreo de Salud</h1>
+    <h1 class="main-title">Panel de Control del Monitor de PA</h1>
 
-    <div class="section">
-        <h2>Lecturas del Sensor</h2>
-        <p>HR Crudo: <span id="hr_crudo" class="valor">--</span></p>
-        <p>HR PROMEDIO SENSOR: <span id="hr_promedio" class="valor">--</span></p>
-        <p>SpO2 SENSOR: <span id="spo2_sensor" class="valor">--</span></p>
-        <p>IR: <span id="ir" class="valor">--</span></p>
-        <p>RED: <span id="red" class="valor">--</span></p>
+    <div class="container">
+        <h2>Estado y Controles</h2>
+        <div id="auth-status-display" class="status-display">Cargando...</div>
+        <button id="toggleAuthButton">Cargando...</button>
     </div>
 
-    <div class="section">
-        <h2>Predicción ML</h2>
-        <p>SYS ML: <span id="sys_ml" class="valor">--</span></p>
-        <p>DIA ML: <span id="dia_ml" class="valor">--</span></p>
-        <p>HR ML: <span id="hr_ml" class="valor">--</span></p>
-        <p>SpO2 ML: <span id="spo2_ml" class="valor">--</span></p>
-        <p>Estado: <span id="estado" class="valor">--</span></p>
+    <div class="container">
+        <h2>Última Estimación Recibida (Tiempo Real)</h2>
+        <div class="data-grid">
+            <div class="data-item"><strong>PAS (Sistólica)</strong> <span id="sysVal">---</span> mmHg</div>
+            <div class="data-item"><strong>PAD (Diastólica)</strong> <span id="diaVal">---</span> mmHg</div>
+            <div class="data-item"><strong>SpO2</strong> <span id="spo2Val">---</span> %</div>
+            <div class="data-item"><strong>HR</strong> <span id="hrVal">---</span> bpm</div>
+            <div class="data-item"><strong>Nivel</strong> <span id="nivelVal">---</span></div>
+            <div class="data-item"><strong>Timestamp</strong> <span id="timestampVal">---</span></div>
+        </div>
     </div>
 
-    <div class="section">
-        <button id="autorizar" class="btn">Autorizar Lectura</button>
-        <button id="capturar" class="btn">Iniciar Captura de 15 Registros</button>
-    </div>
-
-    <div class="section">
-        <h2>Datos de Referencia</h2>
-        <label>SYS Referencia: <input type="number" id="sys_ref" /></label><br>
-        <label>DIA Referencia: <input type="number" id="dia_ref" /></label><br>
-        <label>HR Referencia: <input type="number" id="hr_ref" /></label><br>
-        <button id="guardar_csv" class="btn">Guardar Datos de Referencia y Enviar CSV</button>
-    </div>
-
-    <div class="section">
-        <p>Muestras registradas: <span id="contador" class="green">0 / 15</span></p>
-    </div>
-
-    <div class="section">
-        <h2>Últimos 20 datos registrados</h2>
-        <table id="tabla_datos">
+    <div class="container">
+        <h2>Últimas 20 Mediciones Guardadas</h2>
+        <table id="medicionesTable">
             <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>SYS</th>
-                    <th>DIA</th>
-                    <th>Nivel</th>
-                </tr>
+                <tr><th>ID</th><th>Paciente</th><th>PAS</th><th>PAD</th><th>HR</th><th>SpO2</th><th>Nivel</th></tr>
             </thead>
-            <tbody></tbody>
+            <tbody>
+                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
+            </tbody>
         </table>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+
     <script>
-        async function actualizarPanel() {
-            try {
-                const res = await fetch("/api/ultimos_valores");
-                const data = await res.json();
-                document.getElementById("hr_crudo").textContent = data.hr_crudo;
-                document.getElementById("hr_promedio").textContent = data.hr_promedio;
-                document.getElementById("spo2_sensor").textContent = data.spo2_sensor;
-                document.getElementById("ir").textContent = data.ir;
-                document.getElementById("red").textContent = data.red;
-
-                document.getElementById("sys_ml").textContent = data.sys_ml;
-                document.getElementById("dia_ml").textContent = data.dia_ml;
-                document.getElementById("hr_ml").textContent = data.hr_ml;
-                document.getElementById("spo2_ml").textContent = data.spo2_ml;
-                document.getElementById("estado").textContent = data.estado;
-            } catch (error) {
-                console.error("Error al obtener lecturas:", error);
-            }
-        }
-
-        async function actualizarContador() {
-            const res = await fetch("/api/registro_count");
-            const data = await res.json();
-            document.getElementById("contador").textContent = `${data.count} / 15`;
-        }
-
-        async function cargarUltimosDatos() {
-            const res = await fetch("/api/ultimos_datos");
-            const datos = await res.json();
-            const tbody = document.querySelector("#tabla_datos tbody");
-            tbody.innerHTML = "";
-            datos.forEach(d => {
-                const fila = `<tr><td>${d.id_paciente}</td><td>${d.sys}</td><td>${d.dia}</td><td>${d.nivel}</td></tr>`;
-                tbody.innerHTML += fila;
-            });
-        }
-
-        document.getElementById("autorizar").onclick = () => {
-            fetch("/api/autorizar", { method: "POST" });
-        };
-
-        document.getElementById("capturar").onclick = () => {
-            fetch("/api/iniciar_captura", { method: "POST" });
-        };
-
-        document.getElementById("guardar_csv").onclick = () => {
-            const payload = {
-                sys: document.getElementById("sys_ref").value,
-                dia: document.getElementById("dia_ref").value,
-                hr: document.getElementById("hr_ref").value
+        document.addEventListener('DOMContentLoaded', function() {
+            // --- Referencias a Elementos UI ---
+            const ui = {
+                authButton: document.getElementById('toggleAuthButton'),
+                authStatus: document.getElementById('auth-status-display'),
+                sysVal: document.getElementById('sysVal'),
+                diaVal: document.getElementById('diaVal'),
+                spo2Val: document.getElementById('spo2Val'),
+                hrVal: document.getElementById('hrVal'),
+                nivelVal: document.getElementById('nivelVal'),
+                timestampVal: document.getElementById('timestampVal'),
+                medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
             };
-            fetch("/api/guardar_csv", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            }).then(res => {
-                if (res.ok) alert("CSV guardado y enviado a Google Drive.");
-                else alert("Error al guardar CSV.");
-            });
-        };
 
-        setInterval(() => {
-            actualizarPanel();
-            actualizarContador();
-            cargarUltimosDatos();
-        }, 2000);
+            let estadoAutorizadoGeneral = false;
+
+            // --- Conexión con el servidor Socket.IO ---
+            const socket = io();
+
+            // --- Escuchadores de Eventos del Servidor ---
+
+            // Se activa cuando el servidor envía una nueva medición
+            socket.on('update_data', function(data) {
+                console.log('Datos recibidos:', data);
+                ui.sysVal.textContent = data.sys || '---';
+                ui.diaVal.textContent = data.dia || '---';
+                ui.spo2Val.textContent = data.spo2 || '---';
+                ui.hrVal.textContent = data.hr || '---';
+                ui.nivelVal.textContent = data.nivel || '---';
+                ui.timestampVal.textContent = data.timestamp || '---';
+            });
+
+            // Se activa cuando cambia el estado de autorización en el servidor
+            socket.on('status_update', function(data) {
+                estadoAutorizadoGeneral = data.autorizado;
+                actualizarUIAutorizacion();
+            });
+
+            // Se activa cuando se guarda un nuevo registro para refrescar la tabla
+            socket.on('new_record_saved', function() {
+                console.log('Nuevo registro guardado, actualizando tabla...');
+                actualizarTablaMediciones();
+            });
+
+
+            // --- Lógica de la Interfaz ---
+
+            function actualizarUIAutorizacion() {
+                if (estadoAutorizadoGeneral) {
+                    ui.authButton.textContent = 'Detener Registro en BD';
+                    ui.authButton.className = 'btn-toggle-on';
+                    ui.authStatus.textContent = 'Registro en Base de Datos: AUTORIZADO';
+                    ui.authStatus.className = 'status-display status-autorizado';
+                } else {
+                    ui.authButton.textContent = 'Autorizar Registro en BD';
+                    ui.authButton.className = 'btn-toggle-off';
+                    ui.authStatus.textContent = 'Registro en Base de Datos: DETENIDO';
+                    ui.authStatus.className = 'status-display status-detenido';
+                }
+            }
+
+            function toggleAutorizacion() {
+                fetch('/api/autorizacion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ autorizado: !estadoAutorizadoGeneral }),
+                }).catch(error => console.error('Error al cambiar autorización:', error));
+            }
+
+            function actualizarTablaMediciones() {
+                fetch('/api/ultimas_mediciones')
+                    .then(response => response.json())
+                    .then(data => {
+                        ui.medicionesTbody.innerHTML = ''; // Limpiar tabla
+                        if (data && data.length > 0) {
+                            data.forEach(med => {
+                                let row = ui.medicionesTbody.insertRow();
+                                row.insertCell().textContent = med.id;
+                                row.insertCell().textContent = med.id_paciente;
+                                row.insertCell().textContent = med.sys;
+                                row.insertCell().textContent = med.dia;
+                                row.insertCell().textContent = med.hr;
+                                row.insertCell().textContent = med.spo2;
+                                row.insertCell().textContent = med.nivel;
+                            });
+                        } else {
+                            let row = ui.medicionesTbody.insertRow();
+                            let cell = row.insertCell();
+                            cell.colSpan = 7;
+                            cell.textContent = 'No hay mediciones guardadas.';
+                            cell.style.textAlign = 'center';
+                        }
+                    }).catch(error => console.error('Error al cargar tabla:', error));
+            }
+
+            // --- Inicialización ---
+            ui.authButton.addEventListener('click', toggleAutorizacion);
+
+            // Cargar estado inicial del servidor
+            fetch('/api/autorizacion')
+                .then(response => response.json())
+                .then(data => {
+                    estadoAutorizadoGeneral = data.autorizado;
+                    actualizarUIAutorizacion();
+                });
+
+            // Cargar tabla inicial
+            actualizarTablaMediciones();
+        });
     </script>
 </body>
 </html>
