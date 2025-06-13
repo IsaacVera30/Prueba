@@ -18,22 +18,24 @@
     function actualizarTablaMediciones() {
         fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
             const tbody = document.getElementById('medicionesTable').querySelector('tbody');
-            tbody.innerHTML = '';
+            tbody.innerHTML = ''; // Limpiar tabla antes de rellenar
+
             if (data && data.length > 0) {
                 data.forEach(med => {
                     let row = tbody.insertRow();
-                    row.insertCell().textContent = med.id;
-                    // MODIFICADO: Se añade la celda para el ID del Paciente
-                    row.insertCell().textContent = med.id_paciente;
+                    // MODIFICADO: El orden y contenido de las celdas coincide con la nueva cabecera
+                    row.insertCell().textContent = med.id;            // Columna #
+                    row.insertCell().textContent = med.id_paciente;   // Columna PACIENTE ID
                     row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
                     row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
                     row.insertCell().textContent = med.nivel;
                 });
             } else {
-                // MODIFICADO: El colspan ahora es 5
+                // El colspan se actualiza a 5 para el mensaje de "No hay datos"
                 tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
             }
         });
     }
-    // ...
+
+    // ... (el resto de tu script se mantiene igual)
 </script>
