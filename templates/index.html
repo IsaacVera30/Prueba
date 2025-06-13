@@ -26,8 +26,8 @@
         <p>HR Crudo: <strong id="hr_crudo">---</strong></p>
         <p>HR PROMEDIO SENSOR: <strong id="hr_promedio">---</strong></p>
         <p>SpO2 SENSOR: <strong id="spo2_sensor">---</strong></p>
-        <p>IR: <strong id="ir_val">---</strong></p>
-        <p>RED: <strong id="red_val">---</strong></p>
+        <p>IR: <strong id="ir">---</strong></p>
+        <p>RED: <strong id="red">---</strong></p>
     </div>
 
     <div class="container">
@@ -36,7 +36,7 @@
         <p>DIA ML: <strong id="dia_ml">---</strong></p>
         <p>HR ML: <strong id="hr_ml">---</strong></p>
         <p>SpO2 ML: <strong id="spo2_ml">---</strong></p>
-        <p>Estado: <strong id="estado_ml">---</strong></p>
+        <p>Estado: <strong id="estado">---</strong></p>
     </div>
 
     <div class="container">
@@ -48,18 +48,10 @@
         <h2>Últimos 20 datos registrados</h2>
         <table id="medicionesTable">
             <thead>
-                <tr>
-                    <th>#</th>
-                    <th>PACIENTE ID</th>
-                    <th>SYS</th>
-                    <th>DIA</th>
-                    <th>Nivel</th>
-                </tr>
+                <tr><th>#</th><th>PACIENTE ID</th><th>SYS</th><th>DIA</th><th>Nivel</th></tr>
             </thead>
             <tbody>
-                <tr>
-                    <td colspan="5" style="text-align:center;">Cargando...</td>
-                </tr>
+                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
             </tbody>
         </table>
     </div>
@@ -67,34 +59,29 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // Este objeto 'ui' ahora encontrará todos los elementos correctamente
             const ui = {
-                hr_crudo: document.getElementById('hr_crudo'),
-                hr_promedio: document.getElementById('hr_promedio'),
-                spo2_sensor: document.getElementById('spo2_sensor'),
-                ir_val: document.getElementById('ir_val'),
-                red_val: document.getElementById('red_val'),
-                sys_ml: document.getElementById('sys_ml'),
-                dia_ml: document.getElementById('dia_ml'),
-                hr_ml: document.getElementById('hr_ml'),
-                spo2_ml: document.getElementById('spo2_ml'),
-                estado_ml: document.getElementById('estado_ml'),
+                hr_crudo: document.getElementById('hr_crudo'), hr_promedio: document.getElementById('hr_promedio'),
+                spo2_sensor: document.getElementById('spo2_sensor'), ir: document.getElementById('ir'), red: document.getElementById('red'),
+                sys_ml: document.getElementById('sys_ml'), dia_ml: document.getElementById('dia_ml'),
+                hr_ml: document.getElementById('hr_ml'), spo2_ml: document.getElementById('spo2_ml'),
+                estado: document.getElementById('estado'),
                 medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody'),
-                authButton: document.getElementById('toggleAuthButton'),
-                authStatus: document.getElementById('auth-status-display')
+                authButton: document.getElementById('toggleAuthButton'), authStatus: document.getElementById('auth-status-display')
             };
             let estadoAutorizado = false;
             const socket = io();
 
             socket.on('update_data', function(data) {
-                for (const key in ui) {
-                    if (data[key] !== undefined && ui[key].nodeName) {
+                // Esta función ahora actualizará todos los campos porque los IDs coinciden
+                for (const key in data) {
+                    if (ui[key] && ui[key].nodeName) {
                         ui[key].textContent = data[key];
                     }
                 }
             });
 
             socket.on('new_record_saved', () => actualizarTablaMediciones());
-
             socket.on('status_update', (data) => {
                 estadoAutorizado = data.autorizado;
                 actualizarUIAutorizacion();
@@ -106,40 +93,26 @@
             }
 
             ui.authButton.addEventListener('click', () => {
-                fetch('/api/autorizacion', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ autorizado: !estadoAutorizado })
-                });
+                fetch('/api/autorizacion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autorizado: !estadoAutorizado }) });
             });
 
             function actualizarTablaMediciones() {
-                fetch('/api/ultimas_mediciones')
-                    .then(res => {
-                        if (!res.ok) { throw new Error('Network response was not ok'); }
-                        return res.json();
-                    })
-                    .then(data => {
-                        const tbody = ui.medicionesTbody;
-                        tbody.innerHTML = '';
-                        if (data && data.length > 0) {
-                            data.forEach(med => {
-                                let row = tbody.insertRow();
-                                row.insertCell().textContent = med.id;
-                                row.insertCell().textContent = med.id_paciente;
-                                row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
-                                row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
-                                row.insertCell().textContent = med.nivel;
-                            });
-                        } else {
-                            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error al cargar la tabla:', error);
-                        const tbody = ui.medicionesTbody;
-                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Error al cargar datos.</td></tr>';
-                    });
+                fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
+                    const tbody = ui.medicionesTbody;
+                    tbody.innerHTML = '';
+                    if (data && data.length > 0) {
+                        data.forEach(med => {
+                            let row = tbody.insertRow();
+                            row.insertCell().textContent = med.id;
+                            row.insertCell().textContent = med.id_paciente;
+                            row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
+                            row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
+                            row.insertCell().textContent = med.nivel;
+                        });
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
+                    }
+                });
             }
 
             fetch('/api/autorizacion').then(r => r.json()).then(d => {
