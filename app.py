@@ -240,6 +240,29 @@ def get_ultimas_mediciones_db():
         if conn.is_connected(): conn.close()
         return jsonify([])
 
+### --- ENDPOINT DE PRUEBA PARA ALERTAS (NUEVO) --- ###
+
+@app.route("/api/test_alerta", methods=['POST'])
+def test_alerta_whatsapp():
+    """
+    Este endpoint es solo para pruebas. Permite enviar una alerta
+    manualmente desde Postman sin necesidad de un dispositivo.
+    Espera un JSON como: {"nivel": "HT Crisis", "sys": 185, "dia": 125}
+    """
+    data = request.get_json()
+    if not data or 'nivel' not in data or 'sys' not in data or 'dia' not in data:
+        return jsonify({"error": "Se requiere 'nivel', 'sys' y 'dia' en el JSON."}), 400
+
+    nivel = data['nivel']
+    sys = data['sys']
+    dia = data['dia']
+
+    print(f"⚠️  Recibida petición de prueba para alerta: Nivel={nivel}, SYS={sys}, DIA={dia}")
+    
+    # Llama directamente a la función que envía el mensaje
+    enviar_alerta_whatsapp(nivel, sys, dia)
+
+    return jsonify({"mensaje": f"Prueba de alerta para '{nivel}' enviada."}), 200
 
 ### --- PUNTO DE ENTRADA --- ###
 if __name__ == "__main__":
