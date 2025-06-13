@@ -48,7 +48,13 @@
         <h2>Últimos 20 datos registrados</h2>
         <table id="medicionesTable">
             <thead>
-                <tr><th>#</th><th>PACIENTE ID</th><th>SYS</th><th>DIA</th><th>Nivel</th></tr>
+                <tr>
+                    <th>#</th>
+                    <th>PACIENTE ID</th>
+                    <th>SYS</th>
+                    <th>DIA</th>
+                    <th>Nivel</th>
+                </tr>
             </thead>
             <tbody>
                 <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
@@ -59,7 +65,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Este objeto 'ui' ahora encontrará todos los elementos correctamente
             const ui = {
                 hr_crudo: document.getElementById('hr_crudo'), hr_promedio: document.getElementById('hr_promedio'),
                 spo2_sensor: document.getElementById('spo2_sensor'), ir: document.getElementById('ir'), red: document.getElementById('red'),
@@ -73,7 +78,6 @@
             const socket = io();
 
             socket.on('update_data', function(data) {
-                // Esta función ahora actualizará todos los campos porque los IDs coinciden
                 for (const key in data) {
                     if (ui[key] && ui[key].nodeName) {
                         ui[key].textContent = data[key];
@@ -82,6 +86,7 @@
             });
 
             socket.on('new_record_saved', () => actualizarTablaMediciones());
+
             socket.on('status_update', (data) => {
                 estadoAutorizado = data.autorizado;
                 actualizarUIAutorizacion();
@@ -97,22 +102,32 @@
             });
 
             function actualizarTablaMediciones() {
-                fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
-                    const tbody = ui.medicionesTbody;
-                    tbody.innerHTML = '';
-                    if (data && data.length > 0) {
-                        data.forEach(med => {
-                            let row = tbody.insertRow();
-                            row.insertCell().textContent = med.id;
-                            row.insertCell().textContent = med.id_paciente;
-                            row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
-                            row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
-                            row.insertCell().textContent = med.nivel;
-                        });
-                    } else {
-                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
-                    }
-                });
+                fetch('/api/ultimas_mediciones')
+                    .then(res => {
+                        if (!res.ok) { throw new Error('La respuesta de la red no fue correcta'); }
+                        return res.json();
+                    })
+                    .then(data => {
+                        const tbody = ui.medicionesTbody;
+                        tbody.innerHTML = '';
+                        if (data && data.length > 0) {
+                            data.forEach(med => {
+                                let row = tbody.insertRow();
+                                row.insertCell().textContent = med.id;
+                                row.insertCell().textContent = med.id_paciente;
+                                row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
+                                row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
+                                row.insertCell().textContent = med.nivel;
+                            });
+                        } else {
+                            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al cargar la tabla:', error);
+                        const tbody = ui.medicionesTbody;
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Error al cargar datos.</td></tr>';
+                    });
             }
 
             fetch('/api/autorizacion').then(r => r.json()).then(d => {
