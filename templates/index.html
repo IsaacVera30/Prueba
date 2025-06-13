@@ -57,7 +57,9 @@
                 </tr>
             </thead>
             <tbody>
-                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
+                <tr>
+                    <td colspan="5" style="text-align:center;">Cargando...</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -85,13 +87,14 @@
 
             socket.on('update_data', function(data) {
                 for (const key in ui) {
-                    if (data[key] !== undefined && ui[key] && key !== 'medicionesTbody' && key !== 'authButton' && key !== 'authStatus') {
+                    if (data[key] !== undefined && ui[key].nodeName) {
                         ui[key].textContent = data[key];
                     }
                 }
             });
 
             socket.on('new_record_saved', () => actualizarTablaMediciones());
+
             socket.on('status_update', (data) => {
                 estadoAutorizado = data.autorizado;
                 actualizarUIAutorizacion();
@@ -111,29 +114,39 @@
             });
 
             function actualizarTablaMediciones() {
-                fetch('/api/ultimas_mediciones').then(res => res.json()).then(data => {
-                    const tbody = ui.medicionesTbody;
-                    tbody.innerHTML = '';
-                    if (data && data.length > 0) {
-                        data.forEach(med => {
-                            let row = tbody.insertRow();
-                            // CORREGIDO: Se crean las celdas en el orden correcto
-                            row.insertCell().textContent = med.id;            // Columna #
-                            row.insertCell().textContent = med.id_paciente;   // Columna PACIENTE ID
-                            row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
-                            row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
-                            row.insertCell().textContent = med.nivel;
-                        });
-                    } else {
-                        // CORREGIDO: El colspan se ajusta a 5
-                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
-                    }
-                });
+                fetch('/api/ultimas_mediciones')
+                    .then(res => {
+                        if (!res.ok) { throw new Error('Network response was not ok'); }
+                        return res.json();
+                    })
+                    .then(data => {
+                        const tbody = ui.medicionesTbody;
+                        tbody.innerHTML = '';
+                        if (data && data.length > 0) {
+                            data.forEach(med => {
+                                let row = tbody.insertRow();
+                                row.insertCell().textContent = med.id;
+                                row.insertCell().textContent = med.id_paciente;
+                                row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
+                                row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
+                                row.insertCell().textContent = med.nivel;
+                            });
+                        } else {
+                            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al cargar la tabla:', error);
+                        const tbody = ui.medicionesTbody;
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Error al cargar datos.</td></tr>';
+                    });
             }
+
             fetch('/api/autorizacion').then(r => r.json()).then(d => {
                 estadoAutorizado = d.autorizado;
                 actualizarUIAutorizacion();
             });
+            
             actualizarTablaMediciones();
         });
     </script>
