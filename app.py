@@ -3,6 +3,8 @@ eventlet.monkey_patch()
 
 from flask import Flask, request, jsonify, render_template
 from flask_socketio import SocketIO
+import pandas as pd
+import joblib
 import os
 import mysql.connector
 import requests
@@ -19,8 +21,16 @@ from googleapiclient.http import MediaFileUpload
 app = Flask(__name__)
 socketio = SocketIO(app)
 
+# --- Carga de Modelos ---
+try:
+    modelo_sys = joblib.load('modelo_sys.pkl')
+    modelo_dia = joblib.load('modelo_dia.pkl')
+    print("✅ Modelos de ML cargados correctamente.")
+except Exception as e:
+    print(f"❌ ERROR: No se pudieron cargar los modelos de ML: {e}")
+    modelo_sys, modelo_dia = None, None
+
 # --- Variables Globales ---
-autorizado_db = False # Para guardar en la base de datos
 capturando_entrenamiento = False
 buffer_datos_entrenamiento = []
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv"
@@ -32,9 +42,10 @@ DB_CONFIG = {
     'port': int(os.environ.get("MYSQLPORT", "3306"))
 }
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID')
+CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY')
+CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER')
 
 # --- Funciones Auxiliares ---
-
 def conectar_db():
     try:
         return mysql.connector.connect(**DB_CONFIG)
@@ -43,15 +54,18 @@ def conectar_db():
         return None
 
 def guardar_medicion_mysql(data):
-    # Asume que 'data' tiene las claves necesarias
     conn = conectar_db()
     if not conn: return
     cursor = conn.cursor()
-    query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr, spo2) VALUES (%s, %s, %s, %s, %s, %s)"
+    # CORREGIDO: La consulta SQL solo usa las columnas que existen en tu DB
+    query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
     try:
+        # Se pasan solo los valores correspondientes
         cursor.execute(query, (
-            data.get("id_paciente"), data.get("sys_ml"), data.get("dia_ml"),
-            data.get("estado"), data.get("hr_ml"), data.get("spo2_ml")
+            data.get("id_paciente"),
+            data.get("sys_ml"),
+            data.get("dia_ml"),
+            data.get("estado")
         ))
         conn.commit()
         print(f"✅ Datos guardados en MySQL para paciente {data.get('id_paciente')}")
@@ -60,25 +74,30 @@ def guardar_medicion_mysql(data):
     finally:
         if conn.is_connected(): conn.close()
 
+def enviar_alerta_whatsapp(nivel, sys, dia):
+    if not CALLMEBOT_API_KEY or not CALLMEBOT_PHONE_NUMBER:
+        print("⚠️ Advertencia: Variables de CallMeBot no configuradas.")
+        return
+    mensaje = f"¡Alerta de Salud! Nivel: {nivel} (SYS: {sys}, DIA: {dia})".replace(" ", "%20")
+    url = f"https://api.callmebot.com/whatsapp.php?phone={CALLMEBOT_PHONE_NUMBER}&text={mensaje}&apikey={CALLMEBOT_API_KEY}"
+    try:
+        requests.get(url, timeout=10)
+        print(f"✅ Alerta de WhatsApp enviada.")
+    except Exception as e:
+        print(f"❌ Excepción al enviar alerta: {e}")
+
 def get_google_drive_service():
     try:
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        # Asume que el service_account.json está como Secret File en Render
         creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
-        service = build('drive', 'v3', credentials=creds)
-        print("✅ Servicio de Google Drive autenticado.")
-        return service
+        return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ Error autenticando con Google Drive: {e}")
-        return None
+        print(f"❌ Error autenticando con Google Drive: {e}"); return None
 
 def subir_csv_a_drive():
-    if not FOLDER_ID:
-        print("⚠️ Advertencia: GOOGLE_DRIVE_FOLDER_ID no configurado.")
-        return
+    if not FOLDER_ID: return
     service = get_google_drive_service()
-    if not service or not os.path.exists(CSV_FILENAME):
-        return
+    if not service or not os.path.exists(CSV_FILENAME): return
     try:
         file_metadata = {'name': CSV_FILENAME, 'parents': [FOLDER_ID]}
         media = MediaFileUpload(CSV_FILENAME, mimetype='text/csv', resumable=True)
@@ -86,70 +105,100 @@ def subir_csv_a_drive():
         response = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
         if response.get('files'):
             service.files().update(fileId=response.get('files')[0].get('id'), media_body=media).execute()
-            print(f"✅ Archivo CSV actualizado en Google Drive.")
         else:
             service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            print(f"✅ Archivo CSV creado en Google Drive.")
+        print(f"✅ Archivo CSV sincronizado con Google Drive.")
     except Exception as e:
         print(f"❌ Error al subir archivo a Drive: {e}")
 
 def procesar_buffer_y_guardar(ref_data):
     global buffer_datos_entrenamiento
     if not buffer_datos_entrenamiento: return
-
-    hr_list = [float(d.get("hr_promedio", 0)) for d in buffer_datos_entrenamiento]
-    spo2_list = [float(d.get("spo2_sensor", 0)) for d in buffer_datos_entrenamiento]
-    ir_list = [float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]
-    red_list = [float(d.get("red", 0)) for d in buffer_datos_entrenamiento]
-
+    
     features = {
-        "hr_promedio_sensor": np.mean(hr_list), "spo2_promedio_sensor": np.mean(spo2_list),
-        "ir_mean_filtrado": np.mean(ir_list), "red_mean_filtrado": np.mean(red_list),
-        "ir_std_filtrado": np.std(ir_list), "red_std_filtrado": np.std(red_list)
+        "hr_promedio_sensor": np.mean([float(d.get("hr_promedio", 0)) for d in buffer_datos_entrenamiento]),
+        "spo2_promedio_sensor": np.mean([float(d.get("spo2_sensor", 0)) for d in buffer_datos_entrenamiento]),
+        "ir_mean_filtrado": np.mean([float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]),
+        "red_mean_filtrado": np.mean([float(d.get("red", 0)) for d in buffer_datos_entrenamiento]),
+        "ir_std_filtrado": np.std([float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]),
+        "red_std_filtrado": np.std([float(d.get("red", 0)) for d in buffer_datos_entrenamiento])
     }
     final_row = {
         **features,
         "hr_referencia": ref_data["hr_ref"], "sys_referencia": ref_data["sys_ref"],
         "dia_referencia": ref_data["dia_ref"], "timestamp_captura": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
-
+    
     file_exists = os.path.exists(CSV_FILENAME)
     with open(CSV_FILENAME, 'a', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=final_row.keys())
-        if not file_exists:
-            writer.writeheader()
+        if not file_exists: writer.writeheader()
         writer.writerow(final_row)
     
     print(f"✅ Fila de entrenamiento guardada en {CSV_FILENAME}")
     buffer_datos_entrenamiento = []
     subir_csv_a_drive()
 
+def clasificar_nivel_presion(pas, pad):
+    if pas is None or pad is None: return "N/A"
+    if pas > 180 or pad > 120: return "HT Crisis"
+    if pas >= 140 or pad >= 90: return "HT2"
+    if (pas >= 130 and pas <= 139) or (pad >= 80 and pad <= 89): return "HT1"
+    if (pas >= 120 and pas <= 129) and pad < 80: return "Elevada"
+    return "Normal"
+
 ### --- RUTAS DE LA API --- ###
 
 @app.route("/")
 def home(): return render_template("index.html")
 
-# Este endpoint debe coincidir con el que usa tu ESP32
+# Endpoint que usa tu ESP32
+@app.route("/api/presion", methods=["POST"])
+def recibir_datos_presion():
+    if not modelo_sys or not modelo_dia:
+        return jsonify({"error": "Modelos no disponibles"}), 503
+    try:
+        data = request.get_json()
+        hr_promedio = float(data["hr_promedio"])
+        spo2_sensor = float(data["spo2_sensor"])
+        id_paciente = int(data.get("id_paciente", 1))
+
+        entrada_df = pd.DataFrame([[hr_promedio, spo2_sensor]], columns=['hr', 'spo2'])
+        pas_estimada = modelo_sys.predict(entrada_df)[0]
+        pad_estimada = modelo_dia.predict(entrada_df)[0]
+        nivel_presion = clasificar_nivel_presion(pas_estimada, pad_estimada)
+
+        datos_para_panel = {
+            "hr_crudo": data.get("hr_crudo"), "hr_promedio": f"{hr_promedio:.0f}",
+            "spo2_sensor": f"{spo2_sensor:.1f}", "ir": data.get("ir"), "red": data.get("red"),
+            "sys_ml": f"{pas_estimada:.2f}", "dia_ml": f"{pad_estimada:.2f}",
+            "hr_ml": f"{hr_promedio:.0f}", "spo2_ml": f"{spo2_sensor:.1f}", "estado": nivel_presion
+        }
+        
+        socketio.emit('update_data', datos_para_panel)
+        
+        # Guardado automático
+        guardar_medicion_mysql(datos_para_panel)
+        socketio.emit('new_record_saved')
+        
+        if nivel_presion == "HT Crisis":
+            enviar_alerta_whatsapp(nivel_presion, pas_estimada, pad_estimada)
+        
+        # Respuesta para el dispositivo
+        return jsonify({ "sys": pas_estimada, "dia": pad_estimada, "hr": hr_promedio, "spo2": spo2_sensor, "nivel": nivel_presion }), 200
+    except Exception as e:
+        traceback.print_exc(); return jsonify({"error": str(e)}), 500
+
 @app.route("/api/data", methods=["POST"])
-def recibir_datos():
+def recibir_datos_entrenamiento():
     data = request.get_json()
     if capturando_entrenamiento:
         buffer_datos_entrenamiento.append(data)
         socketio.emit('capture_count_update', {'count': len(buffer_datos_entrenamiento)})
-    
-    socketio.emit('update_data', data)
-    
-    if autorizado_db:
-        guardar_medicion_mysql(data)
-        socketio.emit('new_record_saved')
-    
-    if data.get("estado") == "HT Crisis":
-        # Aquí puedes llamar a una función de alerta si la defines
-        pass
-    
     return jsonify({"status": "ok"})
 
-### --- ENDPOINTS PARA CONTROL DE ENTRENAMIENTO --- ###
+
+### --- ENDPOINTS PARA ENTRENAMIENTO Y DATOS HISTÓRICOS --- ###
 
 @app.route("/api/start_capture", methods=["POST"])
 def start_capture():
@@ -168,27 +217,17 @@ def stop_capture():
 def save_training_data():
     if capturando_entrenamiento:
         return jsonify({"error": "Detén la captura antes de guardar."}), 400
-    
     ref_data = request.get_json()
     procesar_buffer_y_guardar(ref_data)
     return jsonify({"status": "muestra de entrenamiento guardada"})
-
-### --- ENDPOINTS DE ESTADO Y DATOS HISTÓRICOS --- ###
-
-@app.route("/api/autorizacion", methods=["GET", "POST"])
-def api_control_autorizacion_db():
-    global autorizado_db
-    if request.method == "POST":
-        autorizado_db = request.json.get("autorizado", False)
-        socketio.emit('status_update_db', {"autorizado": autorizado_db})
-    return jsonify({"autorizado": autorizado_db})
 
 @app.route("/api/ultimas_mediciones")
 def get_ultimas_mediciones_db():
     conn = conectar_db()
     if not conn: return jsonify([])
     cursor = conn.cursor(dictionary=True)
-    query = "SELECT id, id_paciente, sys, dia, hr, spo2, nivel FROM mediciones ORDER BY id DESC LIMIT 20"
+    # CORREGIDO: La consulta solo pide las columnas que existen
+    query = "SELECT id, id_paciente, sys, dia, nivel FROM mediciones ORDER BY id DESC LIMIT 20"
     try:
         cursor.execute(query)
         records = cursor.fetchall()
