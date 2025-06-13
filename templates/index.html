@@ -4,94 +4,173 @@
     <meta charset="UTF-8">
     <title>Panel de Monitoreo de Salud</title>
     <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
-        h1 { color: #333; }
-        .data-section { margin-bottom: 30px; }
-        .data-item { margin-bottom: 10px; }
-        .highlight { font-weight: bold; font-size: 1.2em; color: #0066cc; }
-        #contador-capturas { font-weight: bold; color: #009933; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f6f6f6;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        h2 {
+            margin-top: 30px;
+        }
+
+        .section {
+            margin-bottom: 20px;
+        }
+
+        span.valor {
+            color: #007bff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        table, th, td {
+            border: 1px solid #aaa;
+        }
+
+        th, td {
+            padding: 8px;
+            text-align: center;
+        }
+
+        .green {
+            color: green;
+        }
+
+        .btn {
+            margin: 5px;
+            padding: 8px 16px;
+        }
     </style>
 </head>
 <body>
     <h1>Panel de Monitoreo de Salud</h1>
 
-    <div class="data-section">
+    <div class="section">
         <h2>Lecturas del Sensor</h2>
-        <div class="data-item">HR Crudo: <span id="hr_crudo" class="highlight">--</span></div>
-        <div class="data-item">HR PROMEDIO SENSOR: <span id="hr_promedio" class="highlight">--</span></div>
-        <div class="data-item">SpO2 SENSOR: <span id="spo2_sensor" class="highlight">--</span></div>
-        <div class="data-item">IR: <span id="ir" class="highlight">--</span></div>
-        <div class="data-item">RED: <span id="red" class="highlight">--</span></div>
+        <p>HR Crudo: <span id="hr_crudo" class="valor">--</span></p>
+        <p>HR PROMEDIO SENSOR: <span id="hr_promedio" class="valor">--</span></p>
+        <p>SpO2 SENSOR: <span id="spo2_sensor" class="valor">--</span></p>
+        <p>IR: <span id="ir" class="valor">--</span></p>
+        <p>RED: <span id="red" class="valor">--</span></p>
     </div>
 
-    <div class="data-section">
+    <div class="section">
         <h2>Predicción ML</h2>
-        <div class="data-item">SYS ML: <span id="sys_ml" class="highlight">--</span></div>
-        <div class="data-item">DIA ML: <span id="dia_ml" class="highlight">--</span></div>
-        <div class="data-item">HR ML: <span id="hr_ml" class="highlight">--</span></div>
-        <div class="data-item">SpO2 ML: <span id="spo2_ml" class="highlight">--</span></div>
-        <div class="data-item">Estado: <span id="estado_ml" class="highlight">--</span></div>
+        <p>SYS ML: <span id="sys_ml" class="valor">--</span></p>
+        <p>DIA ML: <span id="dia_ml" class="valor">--</span></p>
+        <p>HR ML: <span id="hr_ml" class="valor">--</span></p>
+        <p>SpO2 ML: <span id="spo2_ml" class="valor">--</span></p>
+        <p>Estado: <span id="estado" class="valor">--</span></p>
     </div>
 
-    <div class="data-section">
-        <button onclick="guardarMuestra()">Guardar Muestra de Entrenamiento</button>
-        <p>Muestras registradas: <span id="contador-capturas">0</span> / 15</p>
+    <div class="section">
+        <button id="autorizar" class="btn">Autorizar Lectura</button>
+        <button id="capturar" class="btn">Iniciar Captura de 15 Registros</button>
+    </div>
+
+    <div class="section">
+        <h2>Datos de Referencia</h2>
+        <label>SYS Referencia: <input type="number" id="sys_ref" /></label><br>
+        <label>DIA Referencia: <input type="number" id="dia_ref" /></label><br>
+        <label>HR Referencia: <input type="number" id="hr_ref" /></label><br>
+        <button id="guardar_csv" class="btn">Guardar Datos de Referencia y Enviar CSV</button>
+    </div>
+
+    <div class="section">
+        <p>Muestras registradas: <span id="contador" class="green">0 / 15</span></p>
+    </div>
+
+    <div class="section">
+        <h2>Últimos 20 datos registrados</h2>
+        <table id="tabla_datos">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>SYS</th>
+                    <th>DIA</th>
+                    <th>Nivel</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
     </div>
 
     <script>
-        function actualizarDatos() {
-            fetch("/api/ultimos_datos")
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById("hr_crudo").innerText = data.hr_crudo ?? "--";
-                    document.getElementById("hr_promedio").innerText = data.hr_promedio_sensor ?? "--";
-                    document.getElementById("spo2_sensor").innerText = data.spo2_sensor ?? "--";
-                    document.getElementById("ir").innerText = data.ir ?? "--";
-                    document.getElementById("red").innerText = data.red ?? "--";
+        async function actualizarPanel() {
+            try {
+                const res = await fetch("/api/ultimos_valores");
+                const data = await res.json();
+                document.getElementById("hr_crudo").textContent = data.hr_crudo;
+                document.getElementById("hr_promedio").textContent = data.hr_promedio;
+                document.getElementById("spo2_sensor").textContent = data.spo2_sensor;
+                document.getElementById("ir").textContent = data.ir;
+                document.getElementById("red").textContent = data.red;
 
-                    document.getElementById("sys_ml").innerText = data.sys_ml ?? "--";
-                    document.getElementById("dia_ml").innerText = data.dia_ml ?? "--";
-                    document.getElementById("hr_ml").innerText = data.hr_ml ?? "--";
-                    document.getElementById("spo2_ml").innerText = data.spo2_ml ?? "--";
-                    document.getElementById("estado_ml").innerText = data.estado ?? "--";
-                });
+                document.getElementById("sys_ml").textContent = data.sys_ml;
+                document.getElementById("dia_ml").textContent = data.dia_ml;
+                document.getElementById("hr_ml").textContent = data.hr_ml;
+                document.getElementById("spo2_ml").textContent = data.spo2_ml;
+                document.getElementById("estado").textContent = data.estado;
+            } catch (error) {
+                console.error("Error al obtener lecturas:", error);
+            }
         }
 
-        function actualizarContador() {
-            fetch("/api/registro_count")
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById("contador-capturas").innerText = data.restantes ?? "0";
-                });
+        async function actualizarContador() {
+            const res = await fetch("/api/registro_count");
+            const data = await res.json();
+            document.getElementById("contador").textContent = `${data.count} / 15`;
         }
 
-        function guardarMuestra() {
-            const hr_ref = prompt("Ingrese HR de referencia:");
-            const sys_ref = prompt("Ingrese SYS de referencia:");
-            const dia_ref = prompt("Ingrese DIA de referencia:");
-
-            fetch("/api/guardar_muestra", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    hr_referencia: parseInt(hr_ref),
-                    pas_referencia: parseInt(sys_ref),
-                    pad_referencia: parseInt(dia_ref)
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                alert(data.message || "Datos registrados correctamente.");
-                actualizarContador();
+        async function cargarUltimosDatos() {
+            const res = await fetch("/api/ultimos_datos");
+            const datos = await res.json();
+            const tbody = document.querySelector("#tabla_datos tbody");
+            tbody.innerHTML = "";
+            datos.forEach(d => {
+                const fila = `<tr><td>${d.id_paciente}</td><td>${d.sys}</td><td>${d.dia}</td><td>${d.nivel}</td></tr>`;
+                tbody.innerHTML += fila;
             });
         }
 
-        setInterval(actualizarDatos, 2000);
-        setInterval(actualizarContador, 2000);
-        window.onload = () => {
-            actualizarDatos();
-            actualizarContador();
+        document.getElementById("autorizar").onclick = () => {
+            fetch("/api/autorizar", { method: "POST" });
         };
+
+        document.getElementById("capturar").onclick = () => {
+            fetch("/api/iniciar_captura", { method: "POST" });
+        };
+
+        document.getElementById("guardar_csv").onclick = () => {
+            const payload = {
+                sys: document.getElementById("sys_ref").value,
+                dia: document.getElementById("dia_ref").value,
+                hr: document.getElementById("hr_ref").value
+            };
+            fetch("/api/guardar_csv", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }).then(res => {
+                if (res.ok) alert("CSV guardado y enviado a Google Drive.");
+                else alert("Error al guardar CSV.");
+            });
+        };
+
+        setInterval(() => {
+            actualizarPanel();
+            actualizarContador();
+            cargarUltimosDatos();
+        }, 2000);
     </script>
 </body>
 </html>
