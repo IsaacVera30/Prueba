@@ -2,8 +2,6 @@ import eventlet
 eventlet.monkey_patch()
 
 from flask import Flask, request, jsonify, render_template
-import joblib
-import pandas as pd
 from flask_socketio import SocketIO
 import os
 import mysql.connector
@@ -13,6 +11,8 @@ import csv
 from datetime import datetime
 import traceback
 import time
+import joblib # <-- CORRECCIÓN: Importar joblib
+import pandas as pd # <-- CORRECCIÓN: Importar pandas
 
 # Módulos para Google Drive
 from google.oauth2 import service_account
@@ -23,8 +23,6 @@ app = Flask(__name__)
 socketio = SocketIO(app)
 
 # --- Carga de Modelos ---
-# (Esta sección es necesaria si el servidor hace la predicción.
-# Si el ESP32 ya envía sys/dia calculados, se puede eliminar joblib, pandas y sklearn)
 try:
     modelo_sys = joblib.load('modelo_sys.pkl')
     modelo_dia = joblib.load('modelo_dia.pkl')
@@ -51,14 +49,17 @@ CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER')
 
 # --- Funciones Auxiliares ---
 def conectar_db():
-    try: return mysql.connector.connect(**DB_CONFIG)
+    try:
+        return mysql.connector.connect(**DB_CONFIG)
     except Exception as e:
-        print(f"❌ Error DB: {e}"); return None
+        print(f"❌ Error DB: {e}")
+        return None
 
 def guardar_medicion_mysql(data):
     conn = conectar_db()
     if not conn: return
     cursor = conn.cursor()
+    # Usamos .get() con un valor por defecto None para evitar errores si la clave no existe
     query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
     try:
         cursor.execute(query, (
@@ -80,13 +81,13 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
         print(f"❌ Excepción al enviar alerta: {e}")
 
 def get_google_drive_service():
+    # <-- CORRECCIÓN: Usar la variable de entorno para encontrar el archivo de credenciales
     try:
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
         creds = service_account.Credentials.from_service_account_file(
             os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), 
             scopes=SCOPES
         )
-
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
         print(f"❌ Error autenticando con Google Drive: {e}")
@@ -135,8 +136,11 @@ def procesar_buffer_y_guardar(ref_data):
 
 def clasificar_nivel_presion(pas, pad):
     if pas is None or pad is None: return "N/A"
+    pas, pad = float(pas), float(pad)
     if pas > 180 or pad > 120: return "HT Crisis"
-    # ... (otras clasificaciones)
+    if pas >= 140 or pad >= 90: return "HT2"
+    if pas >= 130 or pad >= 80: return "HT1"
+    if pas >= 120 and pad < 80: return "Elevada"
     return "Normal"
 
 ### --- RUTAS DE LA API --- ###
@@ -144,29 +148,60 @@ def clasificar_nivel_presion(pas, pad):
 @app.route("/")
 def home(): return render_template("index.html")
 
+#
+# --- RUTA PRINCIPAL ACTUALIZADA ---
+#
 @app.route("/api/data", methods=["POST"])
 def recibir_datos():
     global last_db_save_time
     data = request.get_json()
-    if not data: return jsonify({"error": "No JSON data"}), 400
+    if not data:
+        return jsonify({"error": "No JSON data"}), 400
 
-    # --- Tarea 1: Manejar modo entrenamiento ---
+    # --- PASO 1: EJECUTAR LA PREDICCIÓN DEL MODELO ---
+    if modelo_sys and modelo_dia and "hr_promedio" in data:
+        try:
+            # Crear un DataFrame con los datos recibidos
+            # Asegúrate que los nombres de las columnas coincidan con los de tu entrenamiento
+            input_df = pd.DataFrame([{
+                "hr_promedio_sensor": float(data.get("hr_promedio", 0)),
+                "spo2_promedio_sensor": float(data.get("spo2_sensor", 0)),
+                "ir_mean_filtrado": float(data.get("ir", 0)),
+                "red_mean_filtrado": float(data.get("red", 0)),
+                # Si usaste más características en tu modelo, añádelas aquí
+                # Por ejemplo, si usaste desviaciones estándar:
+                "ir_std_filtrado": float(data.get("ir_std_filtrado", 0)),
+                "red_std_filtrado": float(data.get("red_std_filtrado", 0))
+            }])
+
+            pred_sys = modelo_sys.predict(input_df)[0]
+            pred_dia = modelo_dia.predict(input_df)[0]
+
+            data['sys_ml'] = pred_sys
+            data['dia_ml'] = pred_dia
+            data['estado'] = clasificar_nivel_presion(pred_sys, pred_dia)
+
+        except Exception as e:
+            print(f"❌ Error durante la predicción ML: {e}")
+            data['sys_ml'] = 0
+            data['dia_ml'] = 0
+            data['estado'] = "Error Pred."
+
+    # --- Tarea 2: Manejar modo entrenamiento ---
     if capturando_entrenamiento:
         buffer_datos_entrenamiento.append(data)
         socketio.emit('capture_count_update', {'count': len(buffer_datos_entrenamiento)})
 
-    # --- Tarea 2: Emitir datos al panel ---
+    # --- Tarea 3: Emitir datos al panel ---
     socketio.emit('update_data', data)
 
-    # --- Tarea 3: Lógica de Guardado en DB ---
+    # --- Tarea 4: Lógica de Guardado en DB ---
     if not capturando_entrenamiento:
         try:
             ir_value = float(data.get("ir", 0))
-            red_value = float(data.get("red", 0))
-            
-            if ir_value > 50000 and red_value > 50000: # Condición de dedo presente
+            if ir_value > 50000: # Condición de dedo presente
                 current_time = time.time()
-                if (current_time - last_db_save_time) >= 5: # Condición de 5 segundos
+                if (current_time - last_db_save_time) >= 5: # Guardar cada 5s
                     guardar_medicion_mysql(data)
                     socketio.emit('new_record_saved')
                     last_db_save_time = current_time
@@ -174,11 +209,19 @@ def recibir_datos():
         except (ValueError, TypeError):
             pass
 
-    # --- Tarea 4: Lógica de Alertas ---
+    # --- Tarea 5: Lógica de Alertas ---
     if data.get("estado") == "HT Crisis":
         enviar_alerta_whatsapp(data.get("estado"), data.get("sys_ml"), data.get("dia_ml"))
-    
-    return jsonify({"status": "ok"})
+
+    # --- PASO 2: CONSTRUIR Y DEVOLVER LA RESPUESTA CORRECTA PARA EL ESP32 ---
+    response_for_esp = {
+        "sys": data.get("sys_ml", 0),
+        "dia": data.get("dia_ml", 0),
+        "hr": data.get("hr_promedio", 0),
+        "spo2": data.get("spo2_sensor", 0),
+        "nivel": data.get("estado", "Error")
+    }
+    return jsonify(response_for_esp)
 
 ### --- ENDPOINTS PARA ENTRENAMIENTO Y DATOS HISTÓRICOS --- ###
 
@@ -212,14 +255,19 @@ def get_ultimas_mediciones_db():
     try:
         cursor.execute(query)
         records = cursor.fetchall()
+        # Convertir todos los valores a string para evitar problemas de serialización
         for rec in records:
-            for key in rec: rec[key] = str(rec[key])
+            for key in rec:
+                if rec[key] is not None:
+                    rec[key] = str(rec[key])
         conn.close()
         return jsonify(records)
     except Exception as e:
+        print(f"❌ Error al obtener últimas mediciones: {e}")
         if conn.is_connected(): conn.close()
         return jsonify([])
 
 ### --- PUNTO DE ENTRADA --- ###
 if __name__ == "__main__":
+    # El puerto lo gestionará Gunicorn en producción
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
