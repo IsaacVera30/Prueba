@@ -82,10 +82,15 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
 def get_google_drive_service():
     try:
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES) 
+        creds = service_account.Credentials.from_service_account_file(
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), 
+            scopes=SCOPES
+        )
+
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ Error autenticando con Google Drive: {e}"); return None
+        print(f"❌ Error autenticando con Google Drive: {e}")
+        return None
 
 def subir_csv_a_drive():
     if not FOLDER_ID: return
