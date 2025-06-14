@@ -11,10 +11,9 @@ import csv
 from datetime import datetime
 import traceback
 import time
-import joblib # <-- CORRECCIÓN: Importar joblib
-import pandas as pd # <-- CORRECCIÓN: Importar pandas
+import joblib
+import pandas as pd
 
-# Módulos para Google Drive
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -22,7 +21,6 @@ from googleapiclient.http import MediaFileUpload
 app = Flask(__name__)
 socketio = SocketIO(app)
 
-# --- Carga de Modelos ---
 try:
     modelo_sys = joblib.load('modelo_sys.pkl')
     modelo_dia = joblib.load('modelo_dia.pkl')
@@ -31,13 +29,11 @@ except Exception as e:
     print(f"⚠️  Advertencia: No se pudieron cargar modelos de ML: {e}")
     modelo_sys, modelo_dia = None, None
 
-# --- Variables Globales ---
-capturando_entrenamiento = False
 buffer_datos_entrenamiento = []
 last_db_save_time = 0
 CSV_FILENAME = "registro_sensor_entrenamiento_alta_calidad.csv"
+LOCK_FILE = "capture.lock"
 
-# --- Configuración ---
 DB_CONFIG = {
     'host': os.environ.get("MYSQLHOST"), 'user': os.environ.get("MYSQLUSER"),
     'password': os.environ.get("MYSQLPASSWORD"), 'database': os.environ.get("MYSQLDATABASE"),
@@ -47,25 +43,17 @@ FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID')
 CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY')
 CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER')
 
-# --- Funciones Auxiliares ---
 def conectar_db():
-    try:
-        return mysql.connector.connect(**DB_CONFIG)
-    except Exception as e:
-        print(f"❌ Error DB: {e}")
-        return None
+    try: return mysql.connector.connect(**DB_CONFIG)
+    except Exception as e: print(f"❌ Error DB: {e}"); return None
 
 def guardar_medicion_mysql(data):
     conn = conectar_db()
     if not conn: return
     cursor = conn.cursor()
-    # Usamos .get() con un valor por defecto None para evitar errores si la clave no existe
     query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel) VALUES (%s, %s, %s, %s)"
     try:
-        cursor.execute(query, (
-            data.get("id_paciente"), data.get("sys_ml"),
-            data.get("dia_ml"), data.get("estado")
-        ))
+        cursor.execute(query, (data.get("id_paciente"), data.get("sys_ml"), data.get("dia_ml"), data.get("estado")))
         conn.commit()
     finally:
         if conn.is_connected(): conn.close()
@@ -77,17 +65,12 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
     try:
         requests.get(url, timeout=10)
         print(f"✅ Alerta de WhatsApp enviada.")
-    except Exception as e:
-        print(f"❌ Excepción al enviar alerta: {e}")
+    except Exception as e: print(f"❌ Excepción al enviar alerta: {e}")
 
 def get_google_drive_service():
-    # <-- CORRECCIÓN: Usar la variable de entorno para encontrar el archivo de credenciales
     try:
-        SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file(
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), 
-            scopes=SCOPES
-        )
+        SCOPES = ['https.www.googleapis.com/auth/drive.file']
+        creds = service_account.Credentials.from_service_account_file(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), scopes=SCOPES)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
         print(f"❌ Error autenticando con Google Drive: {e}")
@@ -113,7 +96,7 @@ def subir_csv_a_drive():
 def procesar_buffer_y_guardar(ref_data):
     global buffer_datos_entrenamiento
     if not buffer_datos_entrenamiento: return
-    
+
     features = {
         "hr_promedio_sensor": np.mean([float(d.get("hr_promedio", 0)) for d in buffer_datos_entrenamiento]),
         "spo2_promedio_sensor": np.mean([float(d.get("spo2_sensor", 0)) for d in buffer_datos_entrenamiento]),
@@ -131,8 +114,15 @@ def procesar_buffer_y_guardar(ref_data):
         writer.writerow(final_row)
     
     print(f"✅ Fila de entrenamiento guardada en {CSV_FILENAME}")
+    
+    # Limpiar y resetear para la próxima sesión
     buffer_datos_entrenamiento = []
     subir_csv_a_drive()
+
+    # --- CORRECCIÓN: Borrar el archivo "interruptor" aquí, al final de todo ---
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+        print("✅ Sistema de captura reseteado (lock file eliminado).")
 
 def clasificar_nivel_presion(pas, pad):
     if pas is None or pad is None: return "N/A"
@@ -143,108 +133,70 @@ def clasificar_nivel_presion(pas, pad):
     if pas >= 120 and pad < 80: return "Elevada"
     return "Normal"
 
-### --- RUTAS DE LA API --- ###
-
 @app.route("/")
 def home(): return render_template("index.html")
 
-#
-# --- RUTA PRINCIPAL ACTUALIZADA ---
-#
 @app.route("/api/data", methods=["POST"])
 def recibir_datos():
-    global last_db_save_time
+    global last_db_save_time, buffer_datos_entrenamiento
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "No JSON data"}), 400
+    if not data: return jsonify({"error": "No JSON data"}), 400
 
-    # --- PASO 1: EJECUTAR LA PREDICCIÓN DEL MODELO ---
-    if modelo_sys and modelo_dia and "hr_promedio" in data:
-        try:
-            # Crear un DataFrame con los datos recibidos
-            # Asegúrate que los nombres de las columnas coincidan con los de tu entrenamiento
-            input_df = pd.DataFrame([{
-                "hr_promedio_sensor": float(data.get("hr_promedio", 0)),
-                "spo2_promedio_sensor": float(data.get("spo2_sensor", 0)),
-                "ir_mean_filtrado": float(data.get("ir", 0)),
-                "red_mean_filtrado": float(data.get("red", 0)),
-                # Si usaste más características en tu modelo, añádelas aquí
-                # Por ejemplo, si usaste desviaciones estándar:
-                "ir_std_filtrado": float(data.get("ir_std_filtrado", 0)),
-                "red_std_filtrado": float(data.get("red_std_filtrado", 0))
-            }])
+    is_capturing = os.path.exists(LOCK_FILE)
 
-            pred_sys = modelo_sys.predict(input_df)[0]
-            pred_dia = modelo_dia.predict(input_df)[0]
-
-            data['sys_ml'] = pred_sys
-            data['dia_ml'] = pred_dia
-            data['estado'] = clasificar_nivel_presion(pred_sys, pred_dia)
-
-        except Exception as e:
-            print(f"❌ Error durante la predicción ML: {e}")
-            data['sys_ml'] = 0
-            data['dia_ml'] = 0
-            data['estado'] = "Error Pred."
-
-    # --- Tarea 2: Manejar modo entrenamiento ---
-    if capturando_entrenamiento:
+    if is_capturing:
         buffer_datos_entrenamiento.append(data)
         socketio.emit('capture_count_update', {'count': len(buffer_datos_entrenamiento)})
-
-    # --- Tarea 3: Emitir datos al panel ---
+        
     socketio.emit('update_data', data)
 
-    # --- Tarea 4: Lógica de Guardado en DB ---
-    if not capturando_entrenamiento:
+    if not is_capturing:
+        if modelo_sys and modelo_dia and "hr_promedio" in data:
+            try:
+                input_df = pd.DataFrame([{"hr_promedio_sensor": float(data.get("hr_promedio", 0)), "spo2_promedio_sensor": float(data.get("spo2_sensor", 0)), "ir_mean_filtrado": float(data.get("ir", 0)), "red_mean_filtrado": float(data.get("red", 0)), "ir_std_filtrado": 0, "red_std_filtrado": 0}])
+                pred_sys = modelo_sys.predict(input_df)[0]; pred_dia = modelo_dia.predict(input_df)[0]
+                data['sys_ml'] = pred_sys; data['dia_ml'] = pred_dia; data['estado'] = clasificar_nivel_presion(pred_sys, pred_dia)
+            except Exception as e:
+                print(f"❌ Error durante la predicción ML: {e}")
+                data['sys_ml'] = 0; data['dia_ml'] = 0; data['estado'] = "Error Pred."
         try:
             ir_value = float(data.get("ir", 0))
-            if ir_value > 50000: # Condición de dedo presente
+            if ir_value > 50000:
                 current_time = time.time()
-                if (current_time - last_db_save_time) >= 5: # Guardar cada 5s
+                if (current_time - last_db_save_time) >= 5:
                     guardar_medicion_mysql(data)
                     socketio.emit('new_record_saved')
                     last_db_save_time = current_time
                     print("✅ Datos guardados en BD (Dedo detectado y 5s cumplidos).")
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError): pass
+        if data.get("estado") == "HT Crisis":
+            enviar_alerta_whatsapp(data.get("estado"), data.get("sys_ml"), data.get("dia_ml"))
 
-    # --- Tarea 5: Lógica de Alertas ---
-    if data.get("estado") == "HT Crisis":
-        enviar_alerta_whatsapp(data.get("estado"), data.get("sys_ml"), data.get("dia_ml"))
-
-    # --- PASO 2: CONSTRUIR Y DEVOLVER LA RESPUESTA CORRECTA PARA EL ESP32 ---
-    response_for_esp = {
-        "sys": data.get("sys_ml", 0),
-        "dia": data.get("dia_ml", 0),
-        "hr": data.get("hr_promedio", 0),
-        "spo2": data.get("spo2_sensor", 0),
-        "nivel": data.get("estado", "Error")
-    }
+    response_for_esp = {"sys": data.get("sys_ml", 0), "dia": data.get("dia_ml", 0), "hr": data.get("hr_promedio", 0), "spo2": data.get("spo2_sensor", 0), "nivel": data.get("estado", "Normal")}
     return jsonify(response_for_esp)
-
-### --- ENDPOINTS PARA ENTRENAMIENTO Y DATOS HISTÓRICOS --- ###
 
 @app.route("/api/start_capture", methods=["POST"])
 def start_capture():
-    global capturando_entrenamiento, buffer_datos_entrenamiento
-    capturando_entrenamiento = True
+    global buffer_datos_entrenamiento
+    with open(LOCK_FILE, "w") as f:
+        f.write("capturing")
     buffer_datos_entrenamiento = []
+    print("✅ Captura de entrenamiento iniciada (lock file creado).")
     return jsonify({"status": "captura iniciada"})
 
 @app.route("/api/stop_capture", methods=["POST"])
 def stop_capture():
-    global capturando_entrenamiento
-    capturando_entrenamiento = False
+    # --- CORRECCIÓN: Ya no se borra el lock file aquí ---
+    print("✅ Captura de entrenamiento detenida (esperando datos de referencia).")
     return jsonify({"status": "captura detenida", "muestras": len(buffer_datos_entrenamiento)})
 
 @app.route("/api/save_training_data", methods=["POST"])
 def save_training_data():
-    if capturando_entrenamiento:
-        return jsonify({"error": "Detén la captura antes de guardar."}), 400
+    if not os.path.exists(LOCK_FILE):
+        return jsonify({"error": "La captura no está en modo 'pausa'. Inicie una nueva captura."}), 400
     ref_data = request.get_json()
     procesar_buffer_y_guardar(ref_data)
-    return jsonify({"status": "muestra de entrenamiento guardada"})
+    return jsonify({"status": "muestra de entrenamiento guardada y sistema reseteado"})
 
 @app.route("/api/ultimas_mediciones")
 def get_ultimas_mediciones_db():
@@ -255,7 +207,6 @@ def get_ultimas_mediciones_db():
     try:
         cursor.execute(query)
         records = cursor.fetchall()
-        # Convertir todos los valores a string para evitar problemas de serialización
         for rec in records:
             for key in rec:
                 if rec[key] is not None:
@@ -267,7 +218,5 @@ def get_ultimas_mediciones_db():
         if conn.is_connected(): conn.close()
         return jsonify([])
 
-### --- PUNTO DE ENTRADA --- ###
 if __name__ == "__main__":
-    # El puerto lo gestionará Gunicorn en producción
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
