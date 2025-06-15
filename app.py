@@ -31,7 +31,7 @@ except Exception as e:
 # --- Variables y Constantes ---
 buffer_datos_entrenamiento = []
 last_db_save_time = 0
-CSV_FILENAME = "registro_sensor_entrenamiento.csv"
+# El nombre del archivo CSV ahora se genera dinámicamente
 LOCK_FILE = "capture.lock"
 
 DB_CONFIG = {
@@ -78,35 +78,32 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
 def get_google_drive_service():
     try:
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        # Volvemos al método de autenticación original que te funcionaba
         creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
         print(f"❌ Error autenticando con Google Drive: {e}")
         return None
 
-def subir_csv_a_drive():
+def subir_csv_a_drive(local_filename):
     if not FOLDER_ID: return
     service = get_google_drive_service()
     if not service:
         print("No se pudo obtener el servicio de Google Drive, la subida se cancela.")
         return
-    if not os.path.exists(CSV_FILENAME):
-        print(f"El archivo {CSV_FILENAME} no existe, la subida se cancela.")
+    if not os.path.exists(local_filename):
+        print(f"El archivo {local_filename} no existe, la subida se cancela.")
         return
     
     try:
-        file_metadata = {'name': CSV_FILENAME, 'parents': [FOLDER_ID]}
-        media = MediaFileUpload(CSV_FILENAME, mimetype='text/csv', resumable=True)
-        query = f"name='{CSV_FILENAME}' and '{FOLDER_ID}' in parents and trashed=false"
-        response = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
-        if response.get('files'):
-            service.files().update(fileId=response.get('files')[0].get('id'), media_body=media).execute()
-        else:
-            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        print(f"✅ Archivo CSV sincronizado con Google Drive.")
+        file_metadata = {'name': local_filename, 'parents': [FOLDER_ID]}
+        media = MediaFileUpload(local_filename, mimetype='text/csv', resumable=True)
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        print(f"✅ Archivo '{local_filename}' subido exitosamente a Google Drive.")
     except Exception as e:
         print(f"❌ Error al subir archivo a Drive: {e}")
+    finally:
+        if os.path.exists(local_filename):
+            os.remove(local_filename)
 
 def procesar_buffer_y_guardar(ref_data):
     global buffer_datos_entrenamiento
@@ -114,6 +111,9 @@ def procesar_buffer_y_guardar(ref_data):
         print("Buffer de entrenamiento vacío, no se guarda nada.")
         return
 
+    timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    unique_csv_filename = f"entrenamiento_{timestamp_str}.csv"
+    
     try:
         features = {
             "hr_promedio_sensor": np.mean([float(d.get("hr_promedio", 0)) for d in buffer_datos_entrenamiento]),
@@ -124,25 +124,23 @@ def procesar_buffer_y_guardar(ref_data):
             "red_std_filtrado": np.std([float(d.get("red", 0)) for d in buffer_datos_entrenamiento])
         }
         
-        final_row = {**features, **ref_data, "timestamp_captura": datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        final_row = {**features, **ref_data, "timestamp_captura": timestamp_str.replace("_", " ")}
         
-        file_exists = os.path.exists(CSV_FILENAME)
-        with open(CSV_FILENAME, 'a', newline='') as csvfile:
+        with open(unique_csv_filename, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=final_row.keys())
-            if not file_exists:
-                writer.writeheader()
+            writer.writeheader()
             writer.writerow(final_row)
         
-        print(f"✅ Fila de entrenamiento guardada en {CSV_FILENAME}")
-        
-        subir_csv_a_drive()
+        print(f"✅ Fila de entrenamiento guardada en archivo local: {unique_csv_filename}")
+        subir_csv_a_drive(unique_csv_filename)
+
+    except Exception as e:
+        print(f"❌ Error al procesar o guardar datos de entrenamiento: {e}")
+    finally:
         buffer_datos_entrenamiento = []
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
             print("✅ Sistema de captura reseteado (lock file eliminado).")
-
-    except Exception as e:
-        print(f"❌ Error al procesar o guardar datos de entrenamiento: {e}")
 
 def clasificar_nivel_presion(pas, pad):
     if pas is None or pad is None: return "N/A"
@@ -173,11 +171,9 @@ def recibir_datos():
         if float(data.get("ir", 0)) > 50000:
             if modelo_sys and modelo_dia:
                 try:
-                    # Usamos los nombres de columna que tus modelos esperan (ej. 'hr', 'spo2')
                     input_data = {
                         'hr': float(data.get("hr_promedio", 0)),
                         'spo2': float(data.get("spo2_sensor", 0))
-                        # Si tus modelos usan más características, añádelas aquí
                     }
                     input_df = pd.DataFrame([input_data])
                     
