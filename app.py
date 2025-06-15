@@ -234,6 +234,28 @@ def get_ultimas_mediciones_db():
         return jsonify([])
 
 # ...(El resto de rutas no cambia)...
+# --- NUEVO ENDPOINT PARA LIMPIAR LA BASE DE DATOS ---
+@app.route("/api/clear_database", methods=['POST'])
+def clear_database():
+    conn = conectar_db()
+    if not conn:
+        return jsonify({"status": "error", "message": "No se pudo conectar a la base de datos."}), 500
+    
+    cursor = conn.cursor()
+    try:
+        print("✅ Solicitud para vaciar la base de datos recibida. Ejecutando TRUNCATE...")
+        cursor.execute("TRUNCATE TABLE mediciones;")
+        conn.commit()
+        print("✅ Tabla 'mediciones' vaciada exitosamente.")
+        # Opcional: Avisar al panel para que actualice la tabla
+        socketio.emit('new_record_saved') 
+        return jsonify({"status": "success", "message": "Tabla 'mediciones' vaciada exitosamente."})
+    except Exception as e:
+        print(f"❌ Error al ejecutar TRUNCATE: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn.is_connected():
+            conn.close()
 
 if __name__ == "__main__":
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
