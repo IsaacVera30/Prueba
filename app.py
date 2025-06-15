@@ -33,8 +33,14 @@ buffer_datos_entrenamiento = []
 last_db_save_time = 0
 CSV_FILENAME = "registro_sensor_entrenamiento.csv"
 LOCK_FILE = "capture.lock"
-DB_CONFIG = {key.replace("MYSQL_", "").lower(): val for key, val in os.environ.items() if key.startswith("MYSQL")}
-DB_CONFIG['port'] = int(DB_CONFIG.get('port', 3306))
+
+DB_CONFIG = {
+    'host': os.environ.get("MYSQLHOST"),
+    'user': os.environ.get("MYSQLUSER"),
+    'password': os.environ.get("MYSQLPASSWORD"),
+    'database': os.environ.get("MYSQLDATABASE"),
+    'port': int(os.environ.get("MYSQLPORT", 3306))
+}
 FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID')
 CALLMEBOT_API_KEY = os.environ.get('CALLMEBOT_API_KEY')
 CALLMEBOT_PHONE_NUMBER = os.environ.get('CALLMEBOT_PHONE_NUMBER')
@@ -71,8 +77,9 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
 
 def get_google_drive_service():
     try:
-        SCOPES = ['https.www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), scopes=SCOPES)
+        SCOPES = ['https://www.googleapis.com/auth/drive.file']
+        # Volvemos al método de autenticación original que te funcionaba
+        creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
         print(f"❌ Error autenticando con Google Drive: {e}")
@@ -81,7 +88,13 @@ def get_google_drive_service():
 def subir_csv_a_drive():
     if not FOLDER_ID: return
     service = get_google_drive_service()
-    if not service or not os.path.exists(CSV_FILENAME): return
+    if not service:
+        print("No se pudo obtener el servicio de Google Drive, la subida se cancela.")
+        return
+    if not os.path.exists(CSV_FILENAME):
+        print(f"El archivo {CSV_FILENAME} no existe, la subida se cancela.")
+        return
+    
     try:
         file_metadata = {'name': CSV_FILENAME, 'parents': [FOLDER_ID]}
         media = MediaFileUpload(CSV_FILENAME, mimetype='text/csv', resumable=True)
@@ -122,9 +135,8 @@ def procesar_buffer_y_guardar(ref_data):
         
         print(f"✅ Fila de entrenamiento guardada en {CSV_FILENAME}")
         
-        buffer_datos_entrenamiento = []
         subir_csv_a_drive()
-
+        buffer_datos_entrenamiento = []
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
             print("✅ Sistema de captura reseteado (lock file eliminado).")
@@ -161,7 +173,14 @@ def recibir_datos():
         if float(data.get("ir", 0)) > 50000:
             if modelo_sys and modelo_dia:
                 try:
-                    input_df = pd.DataFrame([{"hr_promedio_sensor": float(data.get("hr_promedio", 0)), "spo2_promedio_sensor": float(data.get("spo2_sensor", 0)), "ir_mean_filtrado": float(data.get("ir", 0)), "red_mean_filtrado": float(data.get("red", 0)), "ir_std_filtrado": 0, "red_std_filtrado": 0}])
+                    # Usamos los nombres de columna que tus modelos esperan (ej. 'hr', 'spo2')
+                    input_data = {
+                        'hr': float(data.get("hr_promedio", 0)),
+                        'spo2': float(data.get("spo2_sensor", 0))
+                        # Si tus modelos usan más características, añádelas aquí
+                    }
+                    input_df = pd.DataFrame([input_data])
+                    
                     data['sys_ml'] = modelo_sys.predict(input_df)[0]
                     data['dia_ml'] = modelo_dia.predict(input_df)[0]
                     data['estado'] = clasificar_nivel_presion(data['sys_ml'], data['dia_ml'])
