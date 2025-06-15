@@ -71,11 +71,14 @@
                     <th>PACIENTE ID</th>
                     <th>SYS</th>
                     <th>DIA</th>
+                    <!-- CAMBIO: Añadir nuevas columnas -->
+                    <th>HR ML</th>
+                    <th>SpO2 ML</th>
                     <th>Nivel</th>
                 </tr>
             </thead>
             <tbody>
-                <tr><td colspan="5" style="text-align:center;">Cargando...</td></tr>
+                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
             </tbody>
         </table>
     </div>
@@ -104,8 +107,18 @@
             let isCapturing = false;
             const socket = io();
 
+            socket.on('connect', () => console.log('Conectado al servidor Socket.IO'));
+            socket.on('disconnect', () => console.log('Desconectado del servidor Socket.IO'));
+
             socket.on('update_data', function(data) {
-                for (const key in data) { if (ui[key] && ui[key].nodeName) { ui[key].textContent = data[key]; } }
+                for (const key in data) {
+                    if (ui[key] && ui[key].nodeName) {
+                        const value = parseFloat(data[key]);
+                        // Mostrar como entero si no tiene decimales, si no con 2 decimales
+                        ui[key].textContent = Number.isInteger(value) ? value : value.toFixed(2);
+                    }
+                }
+                if(data.estado) { ui.estado.textContent = data.estado; }
             });
 
             socket.on('new_record_saved', () => actualizarTablaMediciones());
@@ -117,12 +130,12 @@
             });
 
             function updateTrainingUI() {
+                // ...(Esta función no cambia)...
                 ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
-                ui.authTrainingBtn.textContent = trainingAuthorized ? '1. Desactivar Modo Entrenamiento' : '1. Autorizar Modo Entrenamiento';
+                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento' : 'Autorizar Modo Entrenamiento';
                 ui.toggleCaptureBtn.disabled = !trainingAuthorized;
                 ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura' : '2. Iniciar Captura';
-                
-                const canEnterReference = !isCapturing && trainingAuthorized;
+                const canEnterReference = !isCapturing && trainingAuthorized && ui.captureStatus.textContent.includes('Detenida');
                 ui.sysRef.disabled = !canEnterReference;
                 ui.diaRef.disabled = !canEnterReference;
                 ui.hrRef.disabled = !canEnterReference;
@@ -131,7 +144,11 @@
 
             ui.authTrainingBtn.addEventListener('click', () => {
                 trainingAuthorized = !trainingAuthorized;
-                if (!trainingAuthorized && isCapturing) { ui.toggleCaptureBtn.click(); }
+                if (!trainingAuthorized && isCapturing) {
+                    isCapturing = false;
+                    fetch('/api/stop_capture', { method: 'POST' });
+                }
+                ui.captureStatus.textContent = '';
                 updateTrainingUI();
             });
 
@@ -151,11 +168,7 @@
             });
 
             ui.saveSampleBtn.addEventListener('click', () => {
-                const refData = {
-                    sys_ref: ui.sysRef.value,
-                    dia_ref: ui.diaRef.value,
-                    hr_ref: ui.hrRef.value
-                };
+                const refData = { sys_ref: ui.sysRef.value, dia_ref: ui.diaRef.value, hr_ref: ui.hrRef.value };
                 if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
                     alert("Por favor, ingrese todos los valores de referencia."); return;
                 }
@@ -163,12 +176,13 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(refData)
-                }).then(res => {
-                    if (res.ok) {
+                }).then(res => res.json())
+                  .then(data => {
+                    if (data.status && data.status.includes("guardada")) {
                         alert("Muestra guardada y enviada a Google Drive exitosamente!");
-                        ui.captureStatus.textContent = '';
+                        ui.captureStatus.textContent = 'Listo para nueva captura.';
                         ui.sysRef.value = ''; ui.diaRef.value = ''; ui.hrRef.value = '';
-                    } else { alert("Error al guardar la muestra."); }
+                    } else { alert("Error al guardar la muestra: " + (data.error || "")); }
                 });
             });
 
@@ -179,14 +193,17 @@
                     if (data && data.length > 0) {
                         data.forEach(med => {
                             let row = tbody.insertRow();
+                            // --- CAMBIO: Añadir las nuevas celdas ---
                             row.insertCell().textContent = med.id;
                             row.insertCell().textContent = med.id_paciente;
                             row.insertCell().textContent = parseFloat(med.sys).toFixed(2);
                             row.insertCell().textContent = parseFloat(med.dia).toFixed(2);
+                            row.insertCell().textContent = med.hr_ml; // Nueva celda
+                            row.insertCell().textContent = med.spo2_ml; // Nueva celda
                             row.insertCell().textContent = med.nivel;
                         });
                     } else {
-                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay datos.</td></tr>';
                     }
                 });
             }
