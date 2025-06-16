@@ -233,6 +233,36 @@ def get_ultimas_mediciones_db():
         if conn and conn.is_connected(): conn.close()
         return jsonify([])
 
+# --- ENDPOINT DE PRUEBA PARA ALERTAS ---
+@app.route("/api/test_alert", methods=['POST'])
+def test_alert():
+    data = request.get_json()
+    if not data or "sys" not in data or "dia" not in data:
+        return jsonify({"error": "Por favor envía 'sys' y 'dia' en el JSON."}), 400
+    
+    sys_val = float(data["sys"])
+    dia_val = float(data["dia"])
+    nivel = clasificar_nivel_presion(sys_val, dia_val)
+    
+    print(f"🚨 Alerta de prueba recibida. Nivel: {nivel}")
+    
+    data_to_save = {
+        "id_paciente": data.get("id_paciente", 99),
+        "sys_ml": sys_val,
+        "dia_ml": dia_val,
+        "hr_ml": data.get("hr", 0),
+        "spo2_ml": data.get("spo2", 0),
+        "estado": nivel
+    }
+    
+    guardar_medicion_mysql(data_to_save)
+    socketio.emit('new_record_saved')
+    
+    if nivel == "HT Crisis":
+        enviar_alerta_whatsapp(nivel, sys_val, dia_val)
+        return jsonify({"status": "Alerta de crisis procesada y guardada.", "data": data_to_save})
+    
+    return jsonify({"status": "Alerta de prueba guardada.", "data": data_to_save})
 
 if __name__ == "__main__":
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
