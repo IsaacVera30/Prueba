@@ -150,6 +150,17 @@ def recibir_datos():
     global last_db_save_time, buffer_datos_entrenamiento
     data = request.get_json()
     if not data: return jsonify({"error": "No JSON data"}), 400
+
+        # --- LÓGICA DE PRUEBA PARA EL BUZZER ---
+    # Si el ID del paciente es 999, forzamos una respuesta de crisis.
+    if data.get("id_paciente") == 999:
+        print("🚨 ID de prueba 999 detectado. Forzando respuesta de HT Crisis para probar el buzzer.")
+        response_for_esp = {
+            "sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"
+        }
+        socketio.emit('update_data', data) # Actualizamos el panel también
+        return jsonify(response_for_esp)
+
     
     # Por defecto, los valores de ML están vacíos
     data['sys_ml'], data['dia_ml'], data['hr_ml'], data['spo2_ml'], data['estado'] = 0, 0, 0, 0, "---"
