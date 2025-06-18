@@ -22,9 +22,9 @@ try:
     # Si tienes modelos para HR y SpO2, cárgalos aquí
     # modelo_hr = joblib.load('modelo_hr.pkl')
     # modelo_spo2 = joblib.load('modelo_spo2.pkl')
-    print("✅ Modelos de ML cargados correctamente.")
+    print("Modelos de ML cargados correctamente.")
 except Exception as e:
-    print(f"⚠️  Advertencia: No se pudieron cargar modelos de ML: {e}")
+    print(f"No se pudieron cargar modelos de ML: {e}")
     modelo_sys, modelo_dia = None, None
 
 # --- Variables y Constantes ---
@@ -48,7 +48,7 @@ def get_google_drive_service():
         creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ Error autenticando con Google Drive: {e}")
+        print(f"Error autenticando con Google Drive: {e}")
         return None
 
 def append_row_to_drive_csv(row_dict):
@@ -78,9 +78,9 @@ def append_row_to_drive_csv(row_dict):
             file_metadata = {'name': DRIVE_CSV_FILENAME, 'parents': [FOLDER_ID]}
             media = MediaIoBaseUpload(io.BytesIO(string_io.getvalue().encode('utf-8')), mimetype='text/csv', resumable=True)
             service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        print(f"✅ Fila añadida exitosamente a '{DRIVE_CSV_FILENAME}' en Google Drive.")
+        print(f"Fila añadida exitosamente a '{DRIVE_CSV_FILENAME}' en Google Drive.")
     except Exception as e:
-        print(f"❌ Error al añadir fila al CSV de Drive: {e}")
+        print(f"Error al añadir fila al CSV de Drive: {e}")
 
 def procesar_buffer_y_guardar(ref_data):
     # ...(Esta función no cambia)...
@@ -99,14 +99,14 @@ def procesar_buffer_y_guardar(ref_data):
         final_row = {'hr_promedio_sensor': features['hr_promedio_sensor'],'spo2_promedio_sensor': features['spo2_promedio_sensor'],'ir_mean_filtrado': features['ir_mean_filtrado'],'red_mean_filtrado': features['red_mean_filtrado'],'ir_std_filtrado': features['ir_std_filtrado'],'red_std_filtrado': features['red_std_filtrado'],'sys_ref': ref_data.get('sys_ref'),'dia_ref': ref_data.get('dia_ref'),'hr_ref': ref_data.get('hr_ref'),'timestamp_captura': timestamp_str}
         append_row_to_drive_csv(final_row)
     except Exception as e:
-        print(f"❌ Error al procesar datos de entrenamiento: {e}")
+        print(f"Error al procesar datos de entrenamiento: {e}")
     finally:
         buffer_datos_entrenamiento = [];
-        if os.path.exists(LOCK_FILE): os.remove(LOCK_FILE); print("✅ Sistema de captura reseteado.")
+        if os.path.exists(LOCK_FILE): os.remove(LOCK_FILE); print("Sistema de captura reseteado")
 
 def conectar_db():
     try: return mysql.connector.connect(**DB_CONFIG)
-    except Exception as e: print(f"❌ Error DB: {e}"); return None
+    except Exception as e: print(f"Error en DB: {e}"); return None
 
 def guardar_medicion_mysql(data):
     conn = conectar_db()
@@ -128,8 +128,8 @@ def enviar_alerta_whatsapp(nivel, sys, dia):
     if not CALLMEBOT_API_KEY or not CALLMEBOT_PHONE_NUMBER: return
     mensaje = f"¡Alerta de Salud! Nivel: {nivel} (SYS: {sys}, DIA: {dia})".replace(" ", "%20")
     url = f"https://api.callmebot.com/whatsapp.php?phone={CALLMEBOT_PHONE_NUMBER}&text={mensaje}&apikey={CALLMEBOT_API_KEY}"
-    try: requests.get(url, timeout=10); print("✅ Alerta de WhatsApp enviada.")
-    except Exception as e: print(f"❌ Excepción al enviar alerta: {e}")
+    try: requests.get(url, timeout=10); print("Alerta de WhatsApp enviada.")
+    except Exception as e: print(f"Excepción al enviar alerta: {e}")
 
 def clasificar_nivel_presion(pas, pad):
     # ...(Esta función no cambia)...
@@ -154,7 +154,7 @@ def recibir_datos():
         # --- LÓGICA DE PRUEBA PARA EL BUZZER ---
     # Si el ID del paciente es 999, forzamos una respuesta de crisis.
     if data.get("id_paciente") == 999:
-        print("🚨 ID de prueba 999 detectado. Forzando respuesta de HT Crisis para probar el buzzer.")
+        print("ID de prueba 999 detectado. Forzando respuesta de HT Crisis para probar el buzzer.")
         response_for_esp = {
             "sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"
         }
@@ -162,7 +162,6 @@ def recibir_datos():
         return jsonify(response_for_esp)
 
     
-    # Por defecto, los valores de ML están vacíos
     data['sys_ml'], data['dia_ml'], data['hr_ml'], data['spo2_ml'], data['estado'] = 0, 0, 0, 0, "---"
 
     if os.path.exists(LOCK_FILE):
@@ -181,7 +180,7 @@ def recibir_datos():
                     data['spo2_ml'] = float(data.get("spo2_sensor", 0)) # Usamos el valor del sensor por ahora
                     data['estado'] = clasificar_nivel_presion(data['sys_ml'], data['dia_ml'])
                 except Exception as e:
-                    print(f"❌ Error durante la predicción ML: {e}")
+                    print(f"Error durante la predicción ML: {e}")
                     data['estado'] = "Error Pred."
             
             if (time.time() - last_db_save_time) >= 5:
@@ -240,7 +239,7 @@ def get_ultimas_mediciones_db():
         conn.close()
         return jsonify(records)
     except Exception as e:
-        print(f"❌ Error al obtener últimas mediciones: {e}")
+        print(f"Error al obtener últimas mediciones: {e}")
         if conn and conn.is_connected(): conn.close()
         return jsonify([])
 
@@ -255,7 +254,7 @@ def test_alert():
     dia_val = float(data["dia"])
     nivel = clasificar_nivel_presion(sys_val, dia_val)
     
-    print(f"🚨 Alerta de prueba recibida. Nivel: {nivel}")
+    print(f"Alerta de prueba recibida. Nivel: {nivel}")
     
     data_to_save = {
         "id_paciente": data.get("id_paciente", 99),
