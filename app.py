@@ -1,3 +1,4 @@
+
 import eventlet
 
 # Parcheo necesario para compatibilidad con Flask + SocketIO
@@ -21,10 +22,11 @@ socketio = SocketIO(app)
 try:
     modelo_sys = joblib.load('models/modelo_sys.pkl')  # Modelo de presión sistólica
     modelo_dia = joblib.load('models/modelo_dia.pkl')  # Modelo de presión diastólica
-    print("Modelos de ML cargados correctamente.")
+    scaler = joblib.load('models/scaler.pkl') 
+    print("Modelos yscaler cargados correctamente.")
 except Exception as e:
-    print(f"Error al cargar modelos: {e}")
-    modelo_sys, modelo_dia = None, None
+    print(f"Error al cargar modelos o scaler: {e}")
+    modelo_sys, modelo_dia = None, None, None
 
 # Variables Globales
 buffer_datos_entrenamiento = []
@@ -155,6 +157,8 @@ def recibir_datos():
                         0,  # Si no hay std calculado aún, puedes ajustar
                         0
                     ]]
+                    input_data = scaler.transform(raw_features)
+                    
                     data['sys_ml'] = modelo_sys.predict(input_data)[0]
                     data['dia_ml'] = modelo_dia.predict(input_data)[0]
                     data['hr_ml'] = float(data.get("hr_promedio", 0))
