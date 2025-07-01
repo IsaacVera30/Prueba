@@ -19,8 +19,8 @@ socketio = SocketIO(app)
 
 # Carga de modelos entrenados con nuevas variables filtradas
 try:
-    modelo_sys = joblib.load('modelo_sys.pkl')  # Modelo de presión sistólica
-    modelo_dia = joblib.load('modelo_dia.pkl')  # Modelo de presión diastólica
+    modelo_sys = joblib.load('models/modelo_sys.pkl')  # Modelo de presión sistólica
+    modelo_dia = joblib.load('models/modelo_dia.pkl')  # Modelo de presión diastólica
     print("Modelos de ML cargados correctamente.")
 except Exception as e:
     print(f"Error al cargar modelos: {e}")
