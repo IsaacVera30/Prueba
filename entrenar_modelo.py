@@ -1,78 +1,82 @@
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
 import joblib
 import os
 
 # --- 1. Configuración ---
 CSV_PATH = 'entrenamiento_ml.csv'
 MODELS_DIR = 'models'
-os.makedirs(MODELS_DIR, exist_ok=True) # Crea la carpeta 'models' si no existe
+os.makedirs(MODELS_DIR, exist_ok=True)
 
-# --- 2. Carga de Datos ---
-print(f"Cargando datos desde '{CSV_PATH}'...")
-try:
-    df = pd.read_csv(CSV_PATH)
-except FileNotFoundError:
-    print(f"Error: No se encontró el archivo '{CSV_PATH}'. Asegúrate de que exista.")
-    exit()
+# --- 2. Análisis y preparación de datos ---
+print(f"\nCargando y analizando datos de '{CSV_PATH}'...")
+df = pd.read_csv(CSV_PATH)
 
-df.dropna(inplace=True) # Elimina filas con datos incompletos
-print(f"Datos cargados. Se usarán {len(df)} muestras para el entrenamiento.")
+# Análisis inicial
+print("\n=== Resumen de datos ===")
+print(f"- Total de muestras: {len(df)}")
+print("- Valores faltantes por columna:")
+print(df.isnull().sum())
 
-# --- 3. Entrenamiento Directo de los 4 Modelos ---
+# Limpieza
+df_clean = df.dropna()
+if len(df) != len(df_clean):
+    print(f"\nSe eliminaron {len(df) - len(df_clean)} filas con valores faltantes")
 
-# Definimos el set completo de características de entrada
+# --- 3. Preparación de características ---
 features = [
-    'hr_promedio_sensor', 
+    'hr_promedio_sensor',
     'spo2_promedio_sensor',
     'ir_mean_filtrado',
     'red_mean_filtrado',
     'ir_std_filtrado',
     'red_std_filtrado'
 ]
-X = df[features]
 
-print("\n--- INICIANDO ENTRENAMIENTO DIRECTO ---")
+X = df_clean[features]
+y_sys = df_clean['sys_ref']
+y_dia = df_clean['dia_ref']
 
-# --- Modelo para SYS (Regresión Lineal) ---
-print("Entrenando modelo para: SYS")
-y_sys = df['sys_ref']
+# División en entrenamiento y prueba (80% train, 20% test)
+X_train, X_test, y_sys_train, y_sys_test = train_test_split(X, y_sys, test_size=0.2, random_state=42)
+_, _, y_dia_train, y_dia_test = train_test_split(X, y_dia, test_size=0.2, random_state=42)
+
+# --- 4. Entrenamiento y evaluación de modelos ---
+print("\n=== Entrenamiento de modelos ===")
+
+# Modelo SYS
+print("\n[Modelo SYS - Presión Sistólica]")
 modelo_sys = LinearRegression()
-modelo_sys.fit(X, y_sys)
-joblib.dump(modelo_sys, os.path.join(MODELS_DIR, 'modelo_sys.pkl'))
-print(" -> Modelo 'modelo_sys.pkl' guardado.")
+modelo_sys.fit(X_train, y_sys_train)
 
-# --- Modelo para DIA (Regresión Lineal) ---
-print("Entrenando modelo para: DIA")
-y_dia = df['dia_ref']
+# Evaluación
+y_sys_pred = modelo_sys.predict(X_test)
+mae_sys = mean_absolute_error(y_sys_test, y_sys_pred)
+r2_sys = r2_score(y_sys_test, y_sys_pred)
+
+print(f"- MAE (Error Absoluto Medio): {mae_sys:.2f} mmHg")
+print(f"- R² (Coeficiente de Determinación): {r2_sys:.3f}")
+
+# Modelo DIA
+print("\n[Modelo DIA - Presión Diastólica]")
 modelo_dia = LinearRegression()
-modelo_dia.fit(X, y_dia)
+modelo_dia.fit(X_train, y_dia_train)
+
+# Evaluación
+y_dia_pred = modelo_dia.predict(X_test)
+mae_dia = mean_absolute_error(y_dia_test, y_dia_pred)
+r2_dia = r2_score(y_dia_test, y_dia_pred)
+
+print(f"- MAE (Error Absoluto Medio): {mae_dia:.2f} mmHg")
+print(f"- R² (Coeficiente de Determinación): {r2_dia:.3f}")
+
+# --- 5. Guardado de modelos ---
+joblib.dump(modelo_sys, os.path.join(MODELS_DIR, 'modelo_sys.pkl'))
 joblib.dump(modelo_dia, os.path.join(MODELS_DIR, 'modelo_dia.pkl'))
-print(" -> Modelo 'modelo_dia.pkl' guardado.")
 
-<<<<<<< HEAD
-# --- Modelo para HR (Regresión Lineal) ---
-print("Entrenando modelo para: HR")
-y_hr = df['hr_ref']
-modelo_hr = LinearRegression()
-modelo_hr.fit(X, y_hr)
-joblib.dump(modelo_hr, os.path.join(MODELS_DIR, 'modelo_hr.pkl'))
-print(" -> Modelo 'modelo_hr.pkl' guardado.")
-
-# --- Modelo para SPO2 (Gradient Boosting) ---
-print("Entrenando modelo para: SPO2")
-# Para SPO2, quitamos la propia variable SPO2 de las entradas para no hacer trampa
-X_spo2 = X.drop(columns=['spo2_promedio_sensor'])
-y_spo2 = df['spo2_promedio_sensor']
-print(" (Aviso: Se ha quitado 'spo2_promedio_sensor' de las entradas para este modelo)")
-modelo_spo2 = GradientBoostingRegressor(n_estimators=100, random_state=42)
-modelo_spo2.fit(X_spo2, y_spo2)
-joblib.dump(modelo_spo2, os.path.join(MODELS_DIR, 'modelo_spo2.pkl'))
-print(" -> Modelo 'modelo_spo2.pkl' guardado.")
-
-
-print("\n¡Proceso completado! Tus 4 modelos han sido entrenados y guardados en la carpeta 'models'.")
-=======
-print("Modelos entrenados y guardados como 'modelo_sys.pkl' y 'modelo_dia.pkl'")
->>>>>>> 77deff23507c89e9bdf8ec41ce24a5d65cab89a8
+print("\n=== Modelos guardados ===")
+print(f"- modelo_sys.pkl (MAE: {mae_sys:.2f} mmHg, R²: {r2_sys:.3f})")
+print(f"- modelo_dia.pkl (MAE: {mae_dia:.2f} mmHg, R²: {r2_dia:.3f})")
+print(f"\nGuardados en: {os.path.abspath(MODELS_DIR)}/")
