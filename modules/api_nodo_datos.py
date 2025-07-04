@@ -1,309 +1,427 @@
-# train.py - VERSIÓN SIMPLIFICADA
-# Script de entrenamiento sin dependencias extra
+# modules/api_nodo_datos.py
+# API especializada para recibir y procesar datos del ESP32
 
-import pandas as pd
+from flask import Blueprint, request, jsonify
+import time
 import numpy as np
-import joblib
-import os
-from pathlib import Path
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, r2_score
+from datetime import datetime
+import logging
 
-def setup_directories():
-    """Crear directorios necesarios"""
-    Path("models").mkdir(exist_ok=True)
-    print("Directorios verificados")
+# Crear blueprint para la API de nodos
+api_nodo_bp = Blueprint('api_nodo', __name__)
 
-def load_and_validate_data(csv_path):
-    """Cargar y validar datos de entrenamiento"""
-    try:
-        df = pd.read_csv(csv_path)
-        print(f"Datos cargados: {len(df)} muestras")
-        
-        # Verificar columnas requeridas
-        required_columns = [
-            "hr_promedio_sensor",
-            "spo2_promedio_sensor", 
-            "ir_mean_filtrado",     
-            "red_mean_filtrado",     
-            "ir_std_filtrado",
-            "red_std_filtrado",
-            "sys_ref",
-            "dia_ref"
-        ]
-        
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Columnas faltantes: {missing_columns}")
-        
-        print("Todas las columnas requeridas están presentes")
-        
-        # Mostrar estadísticas básicas
-        print("\nEstadísticas de los datos:")
-        print(f"HR promedio: {df['hr_promedio_sensor'].mean():.1f} ± {df['hr_promedio_sensor'].std():.1f}")
-        print(f"SpO2 promedio: {df['spo2_promedio_sensor'].mean():.1f} ± {df['spo2_promedio_sensor'].std():.1f}")
-        print(f"SYS promedio: {df['sys_ref'].mean():.1f} ± {df['sys_ref'].std():.1f}")
-        print(f"DIA promedio: {df['dia_ref'].mean():.1f} ± {df['dia_ref'].std():.1f}")
-        
-        return df, required_columns
-        
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Archivo no encontrado: {csv_path}")
-    except Exception as e:
-        raise Exception(f"Error cargando datos: {e}")
+# Logger específico para este módulo
+logger = logging.getLogger(__name__)
 
-def preprocess_data(df, feature_columns):
-    """Preprocesar datos para entrenamiento"""
-    # Eliminar filas con valores nulos
-    df_clean = df.dropna(subset=feature_columns + ["sys_ref", "dia_ref"])
-    print(f"Datos después de limpiar NaN: {len(df_clean)} muestras")
+# Buffer para procesamiento de datos en tiempo real
+class DataBuffer:
+    def __init__(self, max_size=20):
+        self.max_size = max_size
+        self.ir_values = []
+        self.red_values = []
+        self.timestamps = []
     
-    # Eliminar outliers extremos
-    for col in ["sys_ref", "dia_ref"]:
-        Q1 = df_clean[col].quantile(0.01)
-        Q3 = df_clean[col].quantile(0.99)
-        df_clean = df_clean[(df_clean[col] >= Q1) & (df_clean[col] <= Q3)]
-    
-    print(f"Datos después de eliminar outliers: {len(df_clean)} muestras")
-    
-    # Extraer features y targets
-    feature_names = [
-        "hr_promedio_sensor",
-        "spo2_promedio_sensor",
-        "ir_mean_filtrado",     
-        "red_mean_filtrado",       
-        "ir_std_filtrado",
-        "red_std_filtrado"
-    ]
-    
-    X = df_clean[feature_names].values
-    y_sys = df_clean["sys_ref"].values
-    y_dia = df_clean["dia_ref"].values
-    
-    print("Features utilizadas:")
-    for i, name in enumerate(feature_names):
-        print(f"  {i}: {name}")
-    
-    return X, y_sys, y_dia, feature_names
-
-def train_models(X, y_sys, y_dia):
-    """Entrenar modelos de ML"""
-    print("\nIniciando entrenamiento de modelos...")
-    
-    # Escalar features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # División train/test
-    X_train, X_test, y_sys_train, y_sys_test = train_test_split(
-        X_scaled, y_sys, test_size=0.2, random_state=42
-    )
-    _, _, y_dia_train, y_dia_test = train_test_split(
-        X_scaled, y_dia, test_size=0.2, random_state=42
-    )
-    
-    print(f"Datos entrenamiento: {len(X_train)} muestras")
-    print(f"Datos prueba: {len(X_test)} muestras")
-    
-    # Entrenar modelo sistólica
-    modelo_sys = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_sys.fit(X_train, y_sys_train)
-    
-    # Entrenar modelo diastólica
-    modelo_dia = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_dia.fit(X_train, y_dia_train)
-    
-    print("Modelos entrenados exitosamente")
-    
-    return modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test
-
-def evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test):
-    """Evaluar rendimiento de los modelos"""
-    print("\nEvaluando modelos...")
-    
-    # Predicciones
-    pred_sys = modelo_sys.predict(X_test)
-    pred_dia = modelo_dia.predict(X_test)
-    
-    # Métricas sistólica
-    mae_sys = mean_absolute_error(y_sys_test, pred_sys)
-    r2_sys = r2_score(y_sys_test, pred_sys)
-    
-    # Métricas diastólica  
-    mae_dia = mean_absolute_error(y_dia_test, pred_dia)
-    r2_dia = r2_score(y_dia_test, pred_dia)
-    
-    print(f"SISTÓLICA - MAE: {mae_sys:.2f} mmHg, R²: {r2_sys:.3f}")
-    print(f"DIASTÓLICA - MAE: {mae_dia:.2f} mmHg, R²: {r2_dia:.3f}")
-    
-    # Verificar rango de predicciones
-    print(f"\nRango predicciones SYS: {pred_sys.min():.1f} - {pred_sys.max():.1f}")
-    print(f"Rango predicciones DIA: {pred_dia.min():.1f} - {pred_dia.max():.1f}")
-    
-    return {
-        'mae_sys': mae_sys,
-        'mae_dia': mae_dia,
-        'r2_sys': r2_sys,
-        'r2_dia': r2_dia
-    }
-
-def save_models(modelo_sys, modelo_dia, scaler):
-    """Guardar modelos entrenados"""
-    print("\nGuardando modelos...")
-    
-    try:
-        joblib.dump(modelo_sys, "models/modelo_sys.pkl")
-        joblib.dump(modelo_dia, "models/modelo_dia.pkl")
-        joblib.dump(scaler, "models/scaler.pkl")
+    def add_sample(self, ir, red, timestamp):
+        """Añadir nueva muestra al buffer"""
+        self.ir_values.append(ir)
+        self.red_values.append(red) 
+        self.timestamps.append(timestamp)
         
-        print("Modelos guardados exitosamente:")
-        print("  - models/modelo_sys.pkl")
-        print("  - models/modelo_dia.pkl") 
-        print("  - models/scaler.pkl")
-        
-        # Verificar tamaños de archivos
-        for filename in ["modelo_sys.pkl", "modelo_dia.pkl", "scaler.pkl"]:
-            filepath = f"models/{filename}"
-            size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            print(f"  {filename}: {size_mb:.2f} MB")
+        # Mantener tamaño máximo
+        if len(self.ir_values) > self.max_size:
+            self.ir_values.pop(0)
+            self.red_values.pop(0)
+            self.timestamps.pop(0)
+    
+    def get_filtered_values(self):
+        """Obtener valores filtrados (promedio)"""
+        if len(self.ir_values) == 0:
+            return 0, 0, 0, 0
             
-    except Exception as e:
-        raise Exception(f"Error guardando modelos: {e}")
-
-def test_models_integration():
-    """Probar que los modelos funcionen correctamente"""
-    print("\nProbando integración de modelos...")
+        ir_mean = np.mean(self.ir_values)
+        red_mean = np.mean(self.red_values)
+        ir_std = np.std(self.ir_values) if len(self.ir_values) > 1 else 0
+        red_std = np.std(self.red_values) if len(self.red_values) > 1 else 0
+        
+        return ir_mean, red_mean, ir_std, red_std
     
-    try:
-        # Cargar modelos
-        modelo_sys = joblib.load("models/modelo_sys.pkl")
-        modelo_dia = joblib.load("models/modelo_dia.pkl")
-        scaler = joblib.load("models/scaler.pkl")
+    def is_finger_detected(self, ir_threshold=800, ir_max=100000):
+        """Verificar si hay dedo detectado"""
+        if len(self.ir_values) == 0:
+            return False
         
-        # Datos de prueba (valores típicos)
-        test_features = np.array([[
-            75,    # hr_promedio_sensor
-            98,    # spo2_promedio_sensor
-            1250,  # ir_mean_filtrado
-            890,   # red_mean_filtrado
-            15,    # ir_std_filtrado
-            12     # red_std_filtrado
-        ]])
+        current_ir = self.ir_values[-1]
+        return ir_threshold < current_ir < ir_max
+    
+    def get_signal_quality(self):
+        """Evaluar calidad de la señal"""
+        if len(self.ir_values) < 5:
+            return "insufficient_data"
         
-        # Escalar y predecir
-        test_scaled = scaler.transform(test_features)
-        sys_pred = modelo_sys.predict(test_scaled)[0]
-        dia_pred = modelo_dia.predict(test_scaled)[0]
+        ir_mean, red_mean, ir_std, red_std = self.get_filtered_values()
         
-        print(f"Prueba con datos típicos:")
-        print(f"  HR: 75, SpO2: 98, IR: 1250, RED: 890")
-        print(f"  Predicción → SYS: {sys_pred:.1f}, DIA: {dia_pred:.1f}")
-        
-        # Validar que las predicciones sean razonables
-        if 90 <= sys_pred <= 200 and 60 <= dia_pred <= 120:
-            print("Predicciones en rango normal")
+        # Criterios de calidad
+        if ir_mean < 800:
+            return "no_finger"
+        elif ir_mean > 100000:
+            return "saturated"
+        elif ir_std > ir_mean * 0.3:  # Mucha variabilidad
+            return "noisy"
         else:
-            print("Predicciones fuera de rango esperado")
-            
-        return True
+            return "good"
+
+# Buffer global para cada paciente
+patient_buffers = {}
+
+def get_patient_buffer(patient_id):
+    """Obtener o crear buffer para un paciente"""
+    if patient_id not in patient_buffers:
+        patient_buffers[patient_id] = DataBuffer()
+    return patient_buffers[patient_id]
+
+# ========== ENDPOINTS DE LA API ==========
+
+@api_nodo_bp.route('/raw_data', methods=['POST'])
+def receive_raw_data():
+    """
+    Endpoint principal para recibir datos crudos del ESP32
+    Procesa los datos y devuelve análisis ML
+    """
+    try:
+        data = request.get_json()
         
+        if not data:
+            logger.warning("Datos JSON vacíos recibidos")
+            return jsonify({"error": "No JSON data"}), 400
+
+        # Extraer datos básicos
+        patient_id = data.get('id_paciente', 1)
+        ir_value = float(data.get('ir', 0))
+        red_value = float(data.get('red', 0))
+        timestamp = data.get('timestamp', int(time.time() * 1000))
+
+        logger.info(f"Datos ESP32 - Paciente:{patient_id} IR:{ir_value} RED:{red_value}")
+
+        # CASO ESPECIAL: ID 999 para prueba de buzzer
+        if patient_id == 999:
+            logger.info("Modo prueba buzzer activado")
+            response = {
+                "sys": 185, "dia": 125, "hr": 99, "spo2": 99, 
+                "nivel": "HT Crisis", "calidad": "test_mode"
+            }
+            # Notificar vía WebSocket
+            if hasattr(api_nodo_bp, 'websocket_handler'):
+                api_nodo_bp.websocket_handler.emit_update(data)
+            return jsonify(response)
+
+        # Obtener buffer del paciente
+        buffer = get_patient_buffer(patient_id)
+        
+        # Añadir nueva muestra
+        buffer.add_sample(ir_value, red_value, timestamp)
+        
+        # Evaluar calidad de señal
+        signal_quality = buffer.get_signal_quality()
+        finger_detected = buffer.is_finger_detected()
+        
+        logger.info(f"Calidad señal: {signal_quality}, Dedo: {finger_detected}")
+
+        # Respuesta por defecto
+        response = {
+            "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+            "nivel": "Sin datos", "calidad": signal_quality
+        }
+
+        # Solo procesar con ML si hay buena señal
+        if finger_detected and signal_quality == "good":
+            response = process_with_ml(buffer, patient_id, data)
+            
+            # Guardar en base de datos si está configurado
+            if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
+                save_measurement_async(response, patient_id)
+            
+            # Enviar alertas si es necesario
+            if hasattr(api_nodo_bp, 'alert_system'):
+                api_nodo_bp.alert_system.check_and_send_alert(response)
+        
+        else:
+            # Mapear estado según calidad de señal
+            status_map = {
+                "no_finger": "Sin dedo",
+                "saturated": "Señal saturada", 
+                "noisy": "Señal inestable",
+                "insufficient_data": "Procesando..."
+            }
+            response["nivel"] = status_map.get(signal_quality, "Estado desconocido")
+
+        # Notificar vía WebSocket
+        if hasattr(api_nodo_bp, 'websocket_handler'):
+            update_data = {**data, **response, "signal_quality": signal_quality}
+            api_nodo_bp.websocket_handler.emit_update(update_data)
+
+        logger.info(f"Respuesta: SYS:{response['sys']} DIA:{response['dia']} Nivel:{response['nivel']}")
+        return jsonify(response)
+
     except Exception as e:
-        print(f"Error en test de integración: {e}")
-        return False
+        logger.error(f"Error procesando datos: {e}")
+        return jsonify({
+            "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+            "nivel": "Error servidor", "calidad": "error"
+        }), 500
 
-def generate_feature_importance(modelo_sys, modelo_dia, feature_names):
-    """Generar análisis de importancia de features"""
-    print("\nAnalizando importancia de features...")
-    
-    # Importancia sistólica
-    importance_sys = modelo_sys.feature_importances_
-    importance_dia = modelo_dia.feature_importances_
-    
-    print("\nImportancia features para SISTÓLICA:")
-    for name, importance in zip(feature_names, importance_sys):
-        print(f"  {name}: {importance:.3f}")
-    
-    print("\nImportancia features para DIASTÓLICA:")
-    for name, importance in zip(feature_names, importance_dia):
-        print(f"  {name}: {importance:.3f}")
+def process_with_ml(buffer, patient_id, original_data):
+    """Procesar datos con ML y calcular HR/SpO2"""
+    try:
+        # Obtener valores filtrados
+        ir_mean, red_mean, ir_std, red_std = buffer.get_filtered_values()
+        
+        # Calcular HR usando análisis de picos
+        hr_calculated = calculate_heart_rate(buffer)
+        
+        # Calcular SpO2 usando ratio R/IR
+        spo2_calculated = calculate_spo2(buffer)
+        
+        logger.info(f"HR calculado: {hr_calculated}, SpO2: {spo2_calculated}")
 
-def main():
-    """Función principal"""
-    print("ENTRENAMIENTO DE MODELOS ML - VERSIÓN CORREGIDA")
-    print("=" * 60)
+        # Usar ML para predecir presión arterial si está disponible
+        sys_pred, dia_pred = 0, 0
+        if hasattr(api_nodo_bp, 'ml_processor') and api_nodo_bp.ml_processor.is_ready():
+            sys_pred, dia_pred = api_nodo_bp.ml_processor.predict_pressure(
+                hr_calculated, spo2_calculated, ir_mean, red_mean, ir_std, red_std
+            )
+            logger.info(f"ML: SYS:{sys_pred} DIA:{dia_pred}")
+
+        # Clasificar nivel de presión
+        nivel = classify_pressure_level(sys_pred, dia_pred)
+
+        return {
+            "sys": round(sys_pred, 1),
+            "dia": round(dia_pred, 1), 
+            "hr": round(hr_calculated, 0),
+            "spo2": round(spo2_calculated, 0),
+            "nivel": nivel,
+            "calidad": "good"
+        }
+
+    except Exception as e:
+        logger.error(f"Error en procesamiento ML: {e}")
+        return {
+            "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+            "nivel": "Error ML", "calidad": "error"
+        }
+
+def calculate_heart_rate(buffer):
+    """Calcular frecuencia cardíaca usando análisis de picos"""
+    if len(buffer.ir_values) < 10:
+        return 0
     
     try:
-        # 1. Configurar directorios
-        setup_directories()
+        # Usar valores IR para detectar picos
+        ir_values = np.array(buffer.ir_values)
         
-        # 2. Cargar datos (buscar en ubicaciones posibles)
-        csv_paths = [
-            "data/entrenamiento_ml.csv",
-            "entrenamiento_ml.csv",
-            "../entrenamiento_ml.csv"
-        ]
+        # Encontrar diferencias para detectar picos
+        diff = np.diff(ir_values)
         
-        df = None
-        for csv_path in csv_paths:
-            if os.path.exists(csv_path):
-                print(f"Usando archivo: {csv_path}")
-                df, required_columns = load_and_validate_data(csv_path)
-                break
+        # Detectar cambios de negativo a positivo (picos)
+        peaks = []
+        for i in range(1, len(diff)):
+            if diff[i-1] < 0 and diff[i] > 0:
+                peaks.append(i)
         
-        if df is None:
-            raise FileNotFoundError("No se encontró entrenamiento_ml.csv en ninguna ubicación")
+        if len(peaks) < 2:
+            return 0
         
-        # 3. Preprocesar
-        X, y_sys, y_dia, feature_names = preprocess_data(df, required_columns)
+        # Calcular intervalos entre picos
+        intervals = np.diff(peaks)
+        avg_interval = np.mean(intervals)
         
-        # 4. Entrenar
-        modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test = train_models(X, y_sys, y_dia)
+        # Convertir a BPM (asumiendo ~1 Hz de muestreo del ESP32)
+        sample_rate = 1.0  # 1 muestra por segundo del ESP32
+        hr = 60.0 / (avg_interval * sample_rate)
         
-        # 5. Evaluar
-        metrics = evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test)
-        
-        # 6. Análisis de features
-        generate_feature_importance(modelo_sys, modelo_dia, feature_names)
-        
-        # 7. Guardar
-        save_models(modelo_sys, modelo_dia, scaler)
-        
-        # 8. Test de integración
-        if test_models_integration():
-            print("\nENTRENAMIENTO COMPLETADO EXITOSAMENTE")
-            print("Los modelos están listos para usar en producción")
+        # Validar rango
+        if 40 <= hr <= 200:
+            return hr
         else:
-            print("\nFALLÓ EL TEST DE INTEGRACIÓN")
+            return 0
             
-        print(f"\nRESUMEN:")
-        print(f"  • Muestras procesadas: {len(X)}")
-        print(f"  • MAE Sistólica: {metrics['mae_sys']:.2f} mmHg")
-        print(f"  • MAE Diastólica: {metrics['mae_dia']:.2f} mmHg")
-        print(f"  • R² Sistólica: {metrics['r2_sys']:.3f}")
-        print(f"  • R² Diastólica: {metrics['r2_dia']:.3f}")
-        
     except Exception as e:
-        print(f"\nERROR DURANTE EL ENTRENAMIENTO: {e}")
-        return False
-    
-    return True
+        logger.warning(f"Error calculando HR: {e}")
+        return 0
 
-if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+def calculate_spo2(buffer):
+    """Calcular SpO2 usando ratio R/IR"""
+    if len(buffer.ir_values) < 5:
+        return 0
+    
+    try:
+        # Calcular AC y DC para cada canal
+        ir_values = np.array(buffer.ir_values)
+        red_values = np.array(buffer.red_values)
+        
+        # Calcular componentes AC (variabilidad) y DC (promedio)
+        ir_ac = np.std(ir_values)
+        ir_dc = np.mean(ir_values)
+        red_ac = np.std(red_values)
+        red_dc = np.mean(red_values)
+        
+        # Evitar división por cero
+        if ir_dc == 0 or red_dc == 0 or ir_ac == 0:
+            return 0
+        
+        # Calcular ratio R (fórmula estándar para oximetría)
+        r = (red_ac / red_dc) / (ir_ac / ir_dc)
+        
+        # Ecuación de calibración para MAX30102 (empírica)
+        spo2 = 104 - 17 * r
+        
+        # Limitar a rango válido
+        if 70 <= spo2 <= 100:
+            return spo2
+        else:
+            return 0
+            
+    except Exception as e:
+        logger.warning(f"Error calculando SpO2: {e}")
+        return 0
+
+def classify_pressure_level(sys_pressure, dia_pressure):
+    """Clasificar nivel de presión arterial"""
+    if sys_pressure == 0 or dia_pressure == 0:
+        return "Sin datos"
+    
+    if sys_pressure > 180 or dia_pressure > 120:
+        return "HT Crisis"
+    elif sys_pressure >= 140 or dia_pressure >= 90:
+        return "HT2"
+    elif sys_pressure >= 130 or dia_pressure >= 80:
+        return "HT1"
+    elif sys_pressure >= 120 and dia_pressure < 80:
+        return "Elevada"
+    else:
+        return "Normal"
+
+def save_measurement_async(measurement_data, patient_id):
+    """Guardar medición en base de datos de forma asíncrona"""
+    try:
+        if hasattr(api_nodo_bp, 'db_manager'):
+            data_to_save = {
+                'id_paciente': patient_id,
+                'sys_ml': measurement_data['sys'],
+                'dia_ml': measurement_data['dia'],
+                'hr_ml': measurement_data['hr'],
+                'spo2_ml': measurement_data['spo2'],
+                'estado': measurement_data['nivel']
+            }
+            api_nodo_bp.db_manager.save_measurement_async(data_to_save)
+            logger.info(f"Medición guardada para paciente {patient_id}")
+    except Exception as e:
+        logger.error(f"Error guardando medición: {e}")
+
+# ========== ENDPOINTS ADICIONALES ==========
+
+@api_nodo_bp.route('/patient_status/<int:patient_id>', methods=['GET'])
+def get_patient_status(patient_id):
+    """Obtener estado actual de un paciente específico"""
+    try:
+        if patient_id in patient_buffers:
+            buffer = patient_buffers[patient_id]
+            ir_mean, red_mean, ir_std, red_std = buffer.get_filtered_values()
+            
+            status = {
+                "patient_id": patient_id,
+                "finger_detected": buffer.is_finger_detected(),
+                "signal_quality": buffer.get_signal_quality(),
+                "buffer_size": len(buffer.ir_values),
+                "last_values": {
+                    "ir_mean": round(ir_mean, 2),
+                    "red_mean": round(red_mean, 2),
+                    "ir_std": round(ir_std, 2),
+                    "red_std": round(red_std, 2)
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            return jsonify(status)
+        else:
+            return jsonify({
+                "patient_id": patient_id,
+                "status": "no_data",
+                "message": "No hay datos para este paciente"
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error obteniendo estado del paciente {patient_id}: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
+@api_nodo_bp.route('/reset_buffer/<int:patient_id>', methods=['POST'])
+def reset_patient_buffer(patient_id):
+    """Resetear buffer de datos de un paciente"""
+    try:
+        if patient_id in patient_buffers:
+            del patient_buffers[patient_id]
+            logger.info(f"Buffer reseteado para paciente {patient_id}")
+            return jsonify({
+                "status": "success", 
+                "message": f"Buffer del paciente {patient_id} reseteado"
+            })
+        else:
+            return jsonify({
+                "status": "info",
+                "message": f"No existía buffer para paciente {patient_id}"
+            })
+    except Exception as e:
+        logger.error(f"Error reseteando buffer: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
+@api_nodo_bp.route('/system_metrics', methods=['GET'])
+def get_system_metrics():
+    """Obtener métricas del sistema de procesamiento de datos"""
+    try:
+        metrics = {
+            "active_patients": len(patient_buffers),
+            "total_buffers": sum(len(buf.ir_values) for buf in patient_buffers.values()),
+            "patients_with_data": [
+                {
+                    "id": pid,
+                    "buffer_size": len(buf.ir_values),
+                    "finger_detected": buf.is_finger_detected(),
+                    "signal_quality": buf.get_signal_quality()
+                }
+                for pid, buf in patient_buffers.items()
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+        return jsonify(metrics)
+    except Exception as e:
+        logger.error(f"Error obteniendo métricas: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
+# ========== MANEJO DE ERRORES ESPECÍFICOS ==========
+
+@api_nodo_bp.errorhandler(ValueError)
+def handle_value_error(e):
+    logger.error(f"Error de valor en API nodo: {e}")
+    return jsonify({"error": "Datos inválidos"}), 400
+
+@api_nodo_bp.errorhandler(KeyError)
+def handle_key_error(e):
+    logger.error(f"Clave faltante en API nodo: {e}")
+    return jsonify({"error": "Datos incompletos"}), 400
+
+# ========== CONFIGURACIÓN DEL MÓDULO ==========
+
+def init_api_module(app):
+    """Inicializar el módulo API con la aplicación Flask"""
+    logger.info("Inicializando módulo API de nodos")
+    
+    # Configurar logging específico para este módulo
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('[API-NODO] %(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    logger.info("Módulo API de nodos inicializado correctamente")
+
+# Inicializar automáticamente cuando se importe
+init_api_module(None)
