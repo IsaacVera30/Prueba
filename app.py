@@ -1,390 +1,489 @@
+# app.py - VERSION MODULAR
+# Aplicación principal usando arquitectura modular
+
 import eventlet
 eventlet.monkey_patch()
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from flask_socketio import SocketIO
-import os, time, csv, io
-import numpy as np
-import joblib, pandas as pd
+import os
+import time
+import logging
 from datetime import datetime
-import mysql.connector
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import threading  # CAMBIO: añadido para usar threading
+import threading
 
-app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')  # CAMBIO: Se especifica 'eventlet'
+# Importar módulos especializados
+from modules.ml_processor import MLProcessor
+from modules.database_manager import DatabaseManager
+from modules.alert_system import AlertSystem
+from modules.data_collector import DataCollector
+from modules.websocket_handler import WebSocketHandler
+from modules.api_nodo_datos import api_nodo_bp
 
-# Carga de modelos entrenados
-try:
-    modelo_sys = joblib.load('models/modelo_sys.pkl')
-    modelo_dia = joblib.load('models/modelo_dia.pkl')
-    scaler = joblib.load('models/scaler.pkl')
-    print("Modelos cargados")
-except Exception as e:
-    print(f"Error cargando modelos: {e}")
-    modelo_sys, modelo_dia, scaler = None, None, None
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(name)s] %(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
-buffer_datos_entrenamiento = []
-last_db_save_time = 0
-
-# Config
-LOCK_FILE = "capture.lock"
-DRIVE_CSV_FILENAME = "entrenamiento_ml.csv"
-FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
-CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
-CALLMEBOT_PHONE_NUMBER = os.environ.get("CALLMEBOT_PHONE_NUMBER")
-DB_CONFIG = {
-    'host': os.environ.get("MYSQLHOST"),
-    'user': os.environ.get("MYSQLUSER"),
-    'password': os.environ.get("MYSQLPASSWORD"),
-    'database': os.environ.get("MYSQLDATABASE"),
-    'port': int(os.environ.get("MYSQLPORT", 3306))
-}
-
-def clasificar_nivel_presion(pas, pad):
-    if pas is None or pad is None:
-        return "N/A"
-    pas, pad = float(pas), float(pad)
-    if pas > 180 or pad > 120:
-        return "HT Crisis"
-    elif pas >= 140 or pad >= 90:
-        return "HT2"
-    elif pas >= 130 or pad >= 80:
-        return "HT1"
-    elif pas >= 120 and pad < 80:
-        return "Elevada"
-    else:
-        return "Normal"
-
-def conectar_db():
-    try:
-        return mysql.connector.connect(**DB_CONFIG)
-    except Exception as e:
-        print(f"Error DB: {e}")
-        return None
-
-def guardar_medicion_mysql(data):
-    def save_async():
-        conn = conectar_db()
-        if not conn:
-            return
-        cursor = conn.cursor()
-        query = "INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr_ml, spo2_ml) VALUES (%s, %s, %s, %s, %s, %s)"
-        try:
-            cursor.execute(query, (
-                data.get("id_paciente"),
-                data.get("sys_ml"),
-                data.get("dia_ml"),
-                data.get("estado"),
-                data.get("hr_ml"),
-                data.get("spo2_ml")
-            ))
-            conn.commit()
-            print("Medición guardada en DB")
-        except Exception as e:
-            print(f"Error DB: {e}")
-        finally:
-            if conn and conn.is_connected():
-                conn.close()
-    threading.Thread(target=save_async).start()  # CAMBIO: uso de threading
-
-def enviar_alerta_whatsapp(nivel, sys, dia):
-    if not CALLMEBOT_API_KEY or not CALLMEBOT_PHONE_NUMBER:
-        print("WhatsApp no configurado")
-        return
-    def send_async():
-        try:
-            import urllib.request
-            mensaje = f"¡Alerta! Nivel: {nivel} (SYS: {sys}, DIA: {dia})"
-            url = f"https://api.callmebot.com/whatsapp.php?phone={CALLMEBOT_PHONE_NUMBER}&text={mensaje.replace(' ', '%20')}&apikey={CALLMEBOT_API_KEY}"
-            with urllib.request.urlopen(url, timeout=10) as response:
-                print("Alerta enviada")
-        except Exception as e:
-            print(f"Error alerta: {e}")
-    threading.Thread(target=send_async).start()  # CAMBIO
-
-def get_google_drive_service():
-    try:
-        SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
-        return build('drive', 'v3', credentials=creds)
-    except Exception as e:
-        print(f"Error autenticando Drive: {e}")
-        return None
-
-def append_row_to_drive_csv(row_dict):
-    def save_to_drive_async():
-        service = get_google_drive_service()
-        if not service:
-            return
-        try:
-            query = f"name='{DRIVE_CSV_FILENAME}' and '{FOLDER_ID}' in parents and trashed=false"
-            response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-            files = response.get('files', [])
-
-            fieldnames = list(row_dict.keys())
-            string_io = io.StringIO()
-            writer = csv.DictWriter(string_io, fieldnames=fieldnames)
-
-            if files:
-                file_id = files[0].get('id')
-                existing_file = service.files().get_media(fileId=file_id).execute()
-                existing_content = existing_file.decode('utf-8')
-                string_io.write(existing_content)
-                if not existing_content.strip().endswith('\n'):
-                    string_io.write('\n')
-                string_io.seek(0, io.SEEK_END)
-                csv.writer(string_io).writerow(row_dict.values())
-                media = MediaIoBaseUpload(io.BytesIO(string_io.getvalue().encode('utf-8')), mimetype='text/csv')
-                service.files().update(fileId=file_id, media_body=media).execute()
-            else:
-                writer.writeheader()
-                writer.writerow(row_dict)
-                media = MediaIoBaseUpload(io.BytesIO(string_io.getvalue().encode('utf-8')), mimetype='text/csv')
-                file_metadata = {'name': DRIVE_CSV_FILENAME, 'parents': [FOLDER_ID]}
-                service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            print("Fila guardada en Google Drive")
-        except Exception as e:
-            print(f"Error escribiendo en Drive: {e}")
-    threading.Thread(target=save_to_drive_async).start() 
-
-def procesar_buffer_y_guardar(ref_data):
-    """Procesa los datos del buffer y los guarda en Google Drive"""
-    global buffer_datos_entrenamiento
-    if not buffer_datos_entrenamiento:
-        return
+class MedicalMonitorApp:
+    """Aplicación principal del sistema de monitoreo médico"""
     
-    def process_async():
-        global buffer_datos_entrenamiento
+    def __init__(self):
+        self.app = Flask(__name__)
+        self.app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
+        
+        # Inicializar SocketIO
+        self.socketio = SocketIO(
+            self.app, 
+            cors_allowed_origins="*", 
+            async_mode='eventlet',
+            logger=False,
+            engineio_logger=False
+        )
+        
+        # Inicializar módulos especializados
+        self.ml_processor = MLProcessor()
+        self.db_manager = DatabaseManager()
+        self.alert_system = AlertSystem()
+        self.data_collector = DataCollector()
+        self.websocket_handler = WebSocketHandler(self.socketio)
+        
+        # Variables de estado
+        self.system_start_time = time.time()
+        self.last_db_save_time = 0
+        self.save_interval = 5  # segundos
+        
+        # Buffer para datos del ESP32
+        self.buffer_datos_entrenamiento = []
+        self.capture_lock_file = "capture.lock"
+        
+        # Configurar conexiones entre módulos
+        self._setup_module_connections()
+        
+        # Registrar rutas y eventos
+        self._register_routes()
+        self._register_socketio_events()
+        
+        logger.info("Sistema de monitoreo médico inicializado")
+    
+    def _setup_module_connections(self):
+        """Configurar conexiones entre módulos"""
+        # Conectar API con otros módulos
+        api_nodo_bp.ml_processor = self.ml_processor
+        api_nodo_bp.db_manager = self.db_manager
+        api_nodo_bp.alert_system = self.alert_system
+        api_nodo_bp.websocket_handler = self.websocket_handler
+        
+        # Registrar blueprint de API
+        self.app.register_blueprint(api_nodo_bp, url_prefix='/api')
+        
+        # Configurar WebSocket handler
+        self.websocket_handler.register_event_handlers()
+        
+        logger.info("Conexiones entre módulos configuradas")
+    
+    def _register_routes(self):
+        """Registrar rutas de la aplicación"""
+        
+        @self.app.route("/")
+        def home():
+            """Página principal del panel de control"""
+            return render_template("index.html")
+        
+        @self.app.route("/api/data", methods=["POST"])
+        def recibir_datos():
+            """Endpoint legacy para compatibilidad con ESP32 anterior"""
+            return self._handle_legacy_esp32_data()
+        
+        @self.app.route("/api/start_capture", methods=["POST"])
+        def start_capture():
+            """Iniciar captura de datos para entrenamiento"""
+            try:
+                result = self.data_collector.start_capture()
+                
+                # Crear archivo lock para compatibilidad
+                with open(self.capture_lock_file, "w") as f:
+                    f.write("capturing")
+                
+                self.buffer_datos_entrenamiento = []
+                
+                logger.info("Captura de entrenamiento iniciada")
+                return jsonify(result)
+            
+            except Exception as e:
+                logger.error(f"Error iniciando captura: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route("/api/stop_capture", methods=["POST"])
+        def stop_capture():
+            """Detener captura de datos"""
+            try:
+                result = self.data_collector.stop_capture()
+                
+                # Añadir información del buffer local
+                result["muestras_en_buffer"] = len(self.buffer_datos_entrenamiento)
+                
+                logger.info(f"Captura detenida. {len(self.buffer_datos_entrenamiento)} muestras")
+                return jsonify(result)
+            
+            except Exception as e:
+                logger.error(f"Error deteniendo captura: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route("/api/save_training_data", methods=["POST"])
+        def save_training_data():
+            """Guardar datos de entrenamiento"""
+            try:
+                if not os.path.exists(self.capture_lock_file):
+                    return jsonify({"error": "La captura no está activa"}), 400
+                
+                ref_data = request.get_json()
+                if not ref_data:
+                    return jsonify({"error": "Datos de referencia requeridos"}), 400
+                
+                # Procesar buffer y guardar
+                self._process_and_save_training_data(ref_data)
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Datos de entrenamiento guardados",
+                    "samples_processed": len(self.buffer_datos_entrenamiento)
+                })
+            
+            except Exception as e:
+                logger.error(f"Error guardando datos entrenamiento: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route("/api/ultimas_mediciones")
+        def get_ultimas_mediciones():
+            """Obtener últimas mediciones de la base de datos"""
+            try:
+                records = self.db_manager.get_latest_measurements(limit=20)
+                return jsonify(records)
+            except Exception as e:
+                logger.error(f"Error obteniendo mediciones: {e}")
+                return jsonify([])
+        
+        @self.app.route("/api/test_alert", methods=['POST'])
+        def test_alert():
+            """Endpoint de prueba para alertas"""
+            try:
+                data = request.get_json()
+                if not data or "sys" not in data or "dia" not in data:
+                    return jsonify({"error": "Datos incompletos"}), 400
+                
+                # Procesar alerta de prueba
+                test_data = {
+                    "patient_id": data.get("id_paciente", 99),
+                    "sys": float(data["sys"]),
+                    "dia": float(data["dia"]),
+                    "hr": data.get("hr", 0),
+                    "spo2": data.get("spo2", 0),
+                    "nivel": self._classify_pressure_level(float(data["sys"]), float(data["dia"]))
+                }
+                
+                # Guardar en BD
+                self.db_manager.save_measurement_async(test_data)
+                
+                # Enviar alerta
+                self.alert_system.check_and_send_alert(test_data)
+                
+                # Notificar vía WebSocket
+                self.websocket_handler.emit_new_record_saved()
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Alerta de prueba procesada",
+                    "data": test_data
+                })
+            
+            except Exception as e:
+                logger.error(f"Error en test de alerta: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route("/api/system_status")
+        def get_system_status():
+            """Obtener estado completo del sistema"""
+            try:
+                status = {
+                    "timestamp": datetime.now().isoformat(),
+                    "uptime_hours": (time.time() - self.system_start_time) / 3600,
+                    "modules": {
+                        "ml_processor": self.ml_processor.get_status(),
+                        "database": self.db_manager.get_system_health(),
+                        "alerts": self.alert_system.get_status(),
+                        "websocket": self.websocket_handler.get_status(),
+                        "data_collector": self.data_collector.get_status()
+                    }
+                }
+                return jsonify(status)
+            except Exception as e:
+                logger.error(f"Error obteniendo estado del sistema: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        logger.info("Rutas principales registradas")
+    
+    def _register_socketio_events(self):
+        """Registrar eventos de SocketIO"""
+        
+        @self.socketio.on('connect')
+        def handle_connect():
+            client_id = request.sid
+            self.websocket_handler.handle_client_connect(client_id)
+            logger.info(f"Cliente WebSocket conectado: {client_id}")
+        
+        @self.socketio.on('disconnect')
+        def handle_disconnect():
+            client_id = request.sid
+            self.websocket_handler.handle_client_disconnect(client_id)
+            logger.info(f"Cliente WebSocket desconectado: {client_id}")
+        
+        @self.socketio.on('request_system_status')
+        def handle_status_request():
+            try:
+                status = {
+                    "ml_ready": self.ml_processor.is_ready(),
+                    "db_connected": self.db_manager.is_connected(),
+                    "alerts_configured": self.alert_system.is_configured(),
+                    "capture_active": os.path.exists(self.capture_lock_file),
+                    "connected_clients": self.websocket_handler.get_connected_clients_count()
+                }
+                self.websocket_handler.emit_system_status(status)
+            except Exception as e:
+                logger.error(f"Error enviando estado del sistema: {e}")
+        
+        logger.info("Eventos SocketIO registrados")
+    
+    def _handle_legacy_esp32_data(self):
+        """Manejar datos del ESP32 en formato legacy"""
         try:
-            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            features = {
-                "hr_promedio_sensor": np.mean([float(d.get("hr_promedio", 0)) for d in buffer_datos_entrenamiento]),
-                "spo2_promedio_sensor": np.mean([float(d.get("spo2_sensor", 0)) for d in buffer_datos_entrenamiento]),
-                "ir_mean_filtrado": np.mean([float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]),
-                "red_mean_filtrado": np.mean([float(d.get("red", 0)) for d in buffer_datos_entrenamiento]),
-                "ir_std_filtrado": np.std([float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]),
-                "red_std_filtrado": np.std([float(d.get("red", 0)) for d in buffer_datos_entrenamiento])
-            }
-
-            final_row = {
-                **features,
-                'sys_ref': ref_data.get('sys_ref'),
-                'dia_ref': ref_data.get('dia_ref'),
-                'hr_ref': ref_data.get('hr_ref'),
-                'timestamp_captura': timestamp_str
-            }
-
-            append_row_to_drive_csv(final_row)
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "No JSON data"}), 400
+            
+            # Redirigir al endpoint modular
+            # Esto mantiene compatibilidad con ESP32 que usen /api/data
+            return self._process_esp32_data_legacy(data)
+        
         except Exception as e:
-            print(f"Error procesando buffer: {e}")
-        finally:
-            buffer_datos_entrenamiento = []
-            if os.path.exists(LOCK_FILE):
-                os.remove(LOCK_FILE)
-            print("Sistema de captura reseteado")
+            logger.error(f"Error procesando datos legacy: {e}")
+            return jsonify({
+                "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+                "nivel": "Error servidor"
+            }), 500
     
-    # Ejecutar procesamiento de forma asíncrona
-    eventlet.spawn(process_async)
-
-# ========== RUTAS DE LA API ==========
-
-@app.route("/")
-def home():
-    """Ruta principal que renderiza el panel de control"""
-    return render_template("index.html")
-
-@app.route("/api/data", methods=["POST"])
-def recibir_datos():
-    """Endpoint principal para recibir datos del ESP32"""
-    global last_db_save_time, buffer_datos_entrenamiento
-    data = request.get_json()
-    
-    if not data:
-        return jsonify({"error": "No JSON data"}), 400
-
-    # LÓGICA DE PRUEBA PARA EL BUZZER
-    if data.get("id_paciente") == 999:
-        print("ID de prueba 999 detectado. Forzando respuesta de HT Crisis para probar el buzzer.")
-        response = {"sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"}
-        socketio.emit('update_data', data)
-        return jsonify(response)
-
-    # Inicializar valores de predicción
-    data['sys_ml'], data['dia_ml'], data['hr_ml'], data['spo2_ml'], data['estado'] = 0, 0, 0, 0, "---"
-
-    if os.path.exists(LOCK_FILE):
+    def _process_esp32_data_legacy(self, data):
+        """Procesar datos ESP32 en modo legacy"""
+        patient_id = data.get('id_paciente', 1)
+        
+        # Modo prueba buzzer
+        if patient_id == 999:
+            response = {"sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"}
+            self.websocket_handler.emit_update(data)
+            return jsonify(response)
+        
         # Modo captura de entrenamiento
-        buffer_datos_entrenamiento.append(data)
-        socketio.emit('capture_count_update', {'count': len(buffer_datos_entrenamiento)})
-    else:
+        if os.path.exists(self.capture_lock_file):
+            self.buffer_datos_entrenamiento.append(data)
+            self.websocket_handler.emit_capture_count(len(self.buffer_datos_entrenamiento))
+            return jsonify({"status": "capturando", "muestras": len(self.buffer_datos_entrenamiento)})
+        
         # Modo predicción normal
-        print(f"IR recibido: {data.get('ir')}")
-        if float(data.get("ir", 0)) > 50000:
-            if modelo_sys and modelo_dia and scaler:
+        response = {"sys": 0, "dia": 0, "hr": 0, "spo2": 0, "nivel": "Sin datos"}
+        
+        # Verificar señal válida
+        ir_value = float(data.get("ir", 0))
+        if ir_value > 50000:
+            if self.ml_processor.is_ready():
                 try:
-                    # Crear lista de historial para std filtrado
-                    buffer_datos_entrenamiento.append(data)
-                    if len(buffer_datos_entrenamiento) > 5:
-                        buffer_datos_entrenamiento.pop(0)
+                    # Preparar features para ML
+                    hr = float(data.get("hr_promedio", 0))
+                    spo2 = float(data.get("spo2_sensor", 0))
+                    ir_mean = float(data.get("ir", 0))
+                    red_mean = float(data.get("red", 0))
                     
-                    ir_vals = [float(d.get("ir", 0)) for d in buffer_datos_entrenamiento]
-                    red_vals = [float(d.get("red", 0)) for d in buffer_datos_entrenamiento]
-
-                    raw_features = [[
-                        float(data.get("hr_promedio", 0)),
-                        float(data.get("spo2_sensor", 0)),
-                        float(data.get("ir", 0)),
-                        float(data.get("red", 0)),
-                        float(np.std(ir_vals)) if len(ir_vals) > 1 else 0,
-                        float(np.std(red_vals)) if len(red_vals) > 1 else 0
-                    ]]
-
-                    input_data = scaler.transform(raw_features)
-                    data['sys_ml'] = round(modelo_sys.predict(input_data)[0], 2)
-                    data['dia_ml'] = round(modelo_dia.predict(input_data)[0], 2)
-                    data['hr_ml'] = float(data.get("hr_promedio", 0))
-                    data['spo2_ml'] = float(data.get("spo2_sensor", 0))
-                    data['estado'] = clasificar_nivel_presion(data['sys_ml'], data['dia_ml'])
-
+                    # Calcular std (simplificado para legacy)
+                    ir_std = ir_mean * 0.02  # Aproximación
+                    red_std = red_mean * 0.02
+                    
+                    # Predicción ML
+                    sys_pred, dia_pred = self.ml_processor.predict_pressure(
+                        hr, spo2, ir_mean, red_mean, ir_std, red_std
+                    )
+                    
+                    response.update({
+                        "sys": round(sys_pred, 2),
+                        "dia": round(dia_pred, 2),
+                        "hr": round(hr, 2),
+                        "spo2": round(spo2, 2),
+                        "nivel": self._classify_pressure_level(sys_pred, dia_pred)
+                    })
+                    
+                    # Guardar en BD periódicamente
+                    if (time.time() - self.last_db_save_time) >= self.save_interval:
+                        measurement_data = {
+                            'id_paciente': patient_id,
+                            'sys_ml': sys_pred,
+                            'dia_ml': dia_pred,
+                            'hr_ml': hr,
+                            'spo2_ml': spo2,
+                            'estado': response["nivel"]
+                        }
+                        self.db_manager.save_measurement_async(measurement_data)
+                        self.websocket_handler.emit_new_record_saved()
+                        self.last_db_save_time = time.time()
+                    
+                    # Verificar alertas
+                    alert_data = {
+                        'patient_id': patient_id,
+                        'nivel': response["nivel"],
+                        'sys': sys_pred,
+                        'dia': dia_pred,
+                        'hr': hr,
+                        'spo2': spo2
+                    }
+                    self.alert_system.check_and_send_alert(alert_data)
+                
                 except Exception as e:
-                    print(f"Error de predicción: {e}")
-                    data['estado'] = "Error Pred."
-            
-            # Guardar en base de datos cada 5 segundos
-            if (time.time() - last_db_save_time) >= 5:
-                guardar_medicion_mysql(data)
-                socketio.emit('new_record_saved')
-                last_db_save_time = time.time()
-
-            # Enviar alerta si es crisis hipertensiva
-            if data.get("estado") == "HT Crisis":
-                enviar_alerta_whatsapp(data.get("estado"), data.get("sys_ml"), data.get("dia_ml"))
-
-    # Enviar datos al panel de control
-    socketio.emit('update_data', data)
-
-    # Respuesta para el ESP32
-    return jsonify({
-        "sys": round(data.get("sys_ml", 0), 2),
-        "dia": round(data.get("dia_ml", 0), 2),
-        "hr": round(data.get("hr_ml", 0), 2),
-        "spo2": round(data.get("spo2_ml", 0), 2),
-        "nivel": data.get("estado", "Normal")
-    })
-
-@app.route("/api/start_capture", methods=["POST"])
-def start_capture():
-    """Inicia el modo de captura para entrenamiento"""
-    global buffer_datos_entrenamiento
-    
-    def create_lock_async():
-        with open(LOCK_FILE, "w") as f:
-            f.write("capturing")
-    
-    eventlet.spawn(create_lock_async)
-    buffer_datos_entrenamiento = []
-    print("Captura de entrenamiento iniciada")
-    return jsonify({"status": "captura iniciada"})
-
-@app.route("/api/stop_capture", methods=["POST"])
-def stop_capture():
-    """Detiene el modo de captura"""
-    return jsonify({"status": "captura detenida", "muestras": len(buffer_datos_entrenamiento)})
-
-@app.route("/api/save_training_data", methods=["POST"])
-def save_training_data():
-    """Guarda los datos de entrenamiento capturados"""
-    if not os.path.exists(LOCK_FILE):
-        return jsonify({"error": "La captura no está en modo 'pausa'."}), 400
-    
-    ref_data = request.get_json()
-    procesar_buffer_y_guardar(ref_data)
-    return jsonify({"status": "muestra de entrenamiento guardada y sistema reseteado"})
-
-@app.route("/api/ultimas_mediciones")
-def get_ultimas_mediciones_db():
-    """Obtiene las últimas mediciones de la base de datos"""
-    def get_records_async():
-        conn = conectar_db()
-        if not conn:
-            return []
+                    logger.error(f"Error en predicción ML: {e}")
+                    response["nivel"] = "Error ML"
         
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml FROM mediciones ORDER BY id DESC LIMIT 20"
+        # Enviar datos vía WebSocket
+        self.websocket_handler.emit_update({**data, **response})
         
-        try:
-            cursor.execute(query)
-            records = cursor.fetchall()
-            
-            # Convertir todos los valores a string para JSON
-            for rec in records:
-                for key, value in rec.items():
-                    if value is not None:
-                        rec[key] = str(value)
-            
-            return records
-        except Exception as e:
-            print(f"Error al obtener últimas mediciones: {e}")
-            return []
-        finally:
-            if cursor:
-                cursor.close()
-            if conn and conn.is_connected():
-                conn.close()
+        return jsonify(response)
     
-    # Para operaciones de lectura que pueden tomar tiempo, usar thread pool
-    try:
-        records = get_records_async()
-        return jsonify(records)
-    except Exception as e:
-        print(f"Error en ultimas_mediciones: {e}")
-        return jsonify([])
+    def _process_and_save_training_data(self, ref_data):
+        """Procesar y guardar datos de entrenamiento"""
+        if not self.buffer_datos_entrenamiento:
+            raise ValueError("No hay datos en el buffer")
+        
+        def process_async():
+            try:
+                # Calcular promedios del buffer
+                import numpy as np
+                
+                hr_values = [float(d.get("hr_promedio", 0)) for d in self.buffer_datos_entrenamiento]
+                spo2_values = [float(d.get("spo2_sensor", 0)) for d in self.buffer_datos_entrenamiento]
+                ir_values = [float(d.get("ir", 0)) for d in self.buffer_datos_entrenamiento]
+                red_values = [float(d.get("red", 0)) for d in self.buffer_datos_entrenamiento]
+                
+                # Preparar muestra final
+                training_sample = {
+                    "hr_promedio_sensor": np.mean(hr_values) if hr_values else 0,
+                    "spo2_promedio_sensor": np.mean(spo2_values) if spo2_values else 0,
+                    "ir_mean_filtrado": np.mean(ir_values) if ir_values else 0,
+                    "red_mean_filtrado": np.mean(red_values) if red_values else 0,
+                    "ir_std_filtrado": np.std(ir_values) if len(ir_values) > 1 else 0,
+                    "red_std_filtrado": np.std(red_values) if len(red_values) > 1 else 0,
+                    "sys_ref": ref_data.get('sys_ref'),
+                    "dia_ref": ref_data.get('dia_ref'),
+                    "hr_ref": ref_data.get('hr_ref'),
+                    "timestamp_captura": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                # Guardar usando data collector
+                result = self.data_collector.save_training_sample(training_sample)
+                
+                if result.get('success'):
+                    logger.info(f"Datos de entrenamiento guardados: {len(self.buffer_datos_entrenamiento)} muestras")
+                else:
+                    logger.error(f"Error guardando entrenamiento: {result.get('error')}")
+                
+                # Limpiar
+                self.buffer_datos_entrenamiento = []
+                if os.path.exists(self.capture_lock_file):
+                    os.remove(self.capture_lock_file)
+                
+            except Exception as e:
+                logger.error(f"Error procesando datos entrenamiento: {e}")
+        
+        # Ejecutar de forma asíncrona
+        thread = threading.Thread(target=process_async)
+        thread.start()
+    
+    def _classify_pressure_level(self, sys_pressure, dia_pressure):
+        """Clasificar nivel de presión arterial"""
+        if sys_pressure is None or dia_pressure is None:
+            return "N/A"
+        
+        sys_val, dia_val = float(sys_pressure), float(dia_pressure)
+        
+        if sys_val > 180 or dia_val > 120:
+            return "HT Crisis"
+        elif sys_val >= 140 or dia_val >= 90:
+            return "HT2"
+        elif sys_val >= 130 or dia_val >= 80:
+            return "HT1"
+        elif sys_val >= 120 and dia_val < 80:
+            return "Elevada"
+        else:
+            return "Normal"
+    
+    def run(self, host='0.0.0.0', port=None, debug=False):
+        """Ejecutar la aplicación"""
+        if port is None:
+            port = int(os.environ.get("PORT", 10000))
+        
+        logger.info(f"Iniciando servidor en {host}:{port}")
+        logger.info(f"Estado módulos - ML: {self.ml_processor.is_ready()}, "
+                   f"BD: {self.db_manager.is_connected()}, "
+                   f"Alertas: {self.alert_system.is_configured()}")
+        
+        # Crear tablas de BD si no existen
+        if self.db_manager.is_connected():
+            self.db_manager.create_tables_if_not_exist()
+        
+        # Ejecutar servidor
+        self.socketio.run(
+            self.app,
+            host=host,
+            port=port,
+            debug=debug,
+            use_reloader=False  # Evitar problemas con eventlet
+        )
+    
+    def shutdown(self):
+        """Apagar sistema de forma segura"""
+        logger.info("Iniciando apagado del sistema...")
+        
+        # Apagar módulos en orden
+        self.websocket_handler.shutdown()
+        self.alert_system.shutdown()
+        self.db_manager.close_connections()
+        
+        # Limpiar archivos temporales
+        if os.path.exists(self.capture_lock_file):
+            os.remove(self.capture_lock_file)
+        
+        logger.info("Sistema apagado correctamente")
 
-@app.route("/api/test_alert", methods=['POST'])
-def test_alert():
-    """Endpoint de prueba para alertas"""
-    data = request.get_json()
-    if not data or "sys" not in data or "dia" not in data:
-        return jsonify({"error": "Por favor envía 'sys' y 'dia' en el JSON."}), 400
-    
-    sys_val = float(data["sys"])
-    dia_val = float(data["dia"])
-    nivel = clasificar_nivel_presion(sys_val, dia_val)
-    
-    print(f"Alerta de prueba recibida. Nivel: {nivel}")
-    
-    data_to_save = {
-        "id_paciente": data.get("id_paciente", 99),
-        "sys_ml": sys_val,
-        "dia_ml": dia_val,
-        "hr_ml": data.get("hr", 0),
-        "spo2_ml": data.get("spo2", 0),
-        "estado": nivel
-    }
-    
-    guardar_medicion_mysql(data_to_save)
-    socketio.emit('new_record_saved')
-    
-    if nivel == "HT Crisis":
-        enviar_alerta_whatsapp(nivel, sys_val, dia_val)
-        return jsonify({"status": "Alerta de crisis procesada y guardada.", "data": data_to_save})
-    
-    return jsonify({"status": "Alerta de prueba guardada.", "data": data_to_save})
+# Crear instancia global de la aplicación
+medical_app = MedicalMonitorApp()
+app = medical_app.app
+socketio = medical_app.socketio
 
-# ========== EVENTOS DE SOCKETIO ==========
-
-@socketio.on('connect')
-def handle_connect():
-    """Maneja la conexión de clientes WebSocket"""
-    print('Cliente conectado')
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Maneja la desconexión de clientes WebSocket"""
-    print('Cliente desconectado')
+# Función de compatibilidad para gunicorn
+def create_app():
+    """Factory function para compatibilidad con algunos servidores"""
+    return medical_app.app
 
 if __name__ == "__main__":
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)), debug=False)
+    try:
+        # Configurar logging más detallado en desarrollo
+        if os.environ.get('FLASK_ENV') == 'development':
+            logging.getLogger().setLevel(logging.DEBUG)
+        
+        # Ejecutar aplicación
+        medical_app.run(debug=False)
+        
+    except KeyboardInterrupt:
+        logger.info("Apagado por interrupción del usuario")
+        medical_app.shutdown()
+    except Exception as e:
+        logger.error(f"Error crítico en la aplicación: {e}")
+        medical_app.shutdown()
+        raise
