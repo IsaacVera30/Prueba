@@ -65,7 +65,6 @@ class DatabaseManager:
                 'pool_name': 'medical_monitor_pool',
                 'pool_size': self.pool_size,
                 'pool_reset_session': True,
-                'pool_pre_ping': True,
                 'connect_timeout': 10,
                 'autocommit': True
             }
