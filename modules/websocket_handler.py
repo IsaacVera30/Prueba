@@ -1,309 +1,466 @@
-# train.py - VERSIÓN SIMPLIFICADA
-# Script de entrenamiento sin dependencias extra
+# modules/websocket_handler.py
+# Manejador especializado para comunicaciones WebSocket
 
-import pandas as pd
-import numpy as np
-import joblib
-import os
-from pathlib import Path
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, r2_score
+import logging
+import threading
+import time
+import json
+from datetime import datetime
+from collections import defaultdict
+import queue
 
-def setup_directories():
-    """Crear directorios necesarios"""
-    Path("models").mkdir(exist_ok=True)
-    print("Directorios verificados")
-
-def load_and_validate_data(csv_path):
-    """Cargar y validar datos de entrenamiento"""
-    try:
-        df = pd.read_csv(csv_path)
-        print(f"Datos cargados: {len(df)} muestras")
+class WebSocketHandler:
+    """Manejador especializado para comunicaciones WebSocket en tiempo real"""
+    
+    def __init__(self, socketio_instance=None):
+        self.logger = logging.getLogger(__name__)
+        self.socketio = socketio_instance
         
-        # Verificar columnas requeridas
-        required_columns = [
-            "hr_promedio_sensor",
-            "spo2_promedio_sensor", 
-            "ir_mean_filtrado",     
-            "red_mean_filtrado",     
-            "ir_std_filtrado",
-            "red_std_filtrado",
-            "sys_ref",
-            "dia_ref"
-        ]
+        # Estado de conexiones
+        self.connected_clients = set()
+        self.client_info = {}
         
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Columnas faltantes: {missing_columns}")
+        # Métricas de comunicación
+        self.messages_sent = 0
+        self.messages_failed = 0
+        self.last_message_time = 0
         
-        print("Todas las columnas requeridas están presentes")
+        # Buffer para mensajes pendientes
+        self.message_queue = queue.Queue()
+        self.max_queue_size = 1000
         
-        # Mostrar estadísticas básicas
-        print("\nEstadísticas de los datos:")
-        print(f"HR promedio: {df['hr_promedio_sensor'].mean():.1f} ± {df['hr_promedio_sensor'].std():.1f}")
-        print(f"SpO2 promedio: {df['spo2_promedio_sensor'].mean():.1f} ± {df['spo2_promedio_sensor'].std():.1f}")
-        print(f"SYS promedio: {df['sys_ref'].mean():.1f} ± {df['sys_ref'].std():.1f}")
-        print(f"DIA promedio: {df['dia_ref'].mean():.1f} ± {df['dia_ref'].std():.1f}")
+        # Control de rate limiting
+        self.rate_limits = defaultdict(list)
+        self.max_messages_per_minute = 60
         
-        return df, required_columns
+        # Lock para thread safety
+        self.handler_lock = threading.Lock()
         
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Archivo no encontrado: {csv_path}")
-    except Exception as e:
-        raise Exception(f"Error cargando datos: {e}")
-
-def preprocess_data(df, feature_columns):
-    """Preprocesar datos para entrenamiento"""
-    # Eliminar filas con valores nulos
-    df_clean = df.dropna(subset=feature_columns + ["sys_ref", "dia_ref"])
-    print(f"Datos después de limpiar NaN: {len(df_clean)} muestras")
-    
-    # Eliminar outliers extremos
-    for col in ["sys_ref", "dia_ref"]:
-        Q1 = df_clean[col].quantile(0.01)
-        Q3 = df_clean[col].quantile(0.99)
-        df_clean = df_clean[(df_clean[col] >= Q1) & (df_clean[col] <= Q3)]
-    
-    print(f"Datos después de eliminar outliers: {len(df_clean)} muestras")
-    
-    # Extraer features y targets
-    feature_names = [
-        "hr_promedio_sensor",
-        "spo2_promedio_sensor",
-        "ir_mean_filtrado",     
-        "red_mean_filtrado",       
-        "ir_std_filtrado",
-        "red_std_filtrado"
-    ]
-    
-    X = df_clean[feature_names].values
-    y_sys = df_clean["sys_ref"].values
-    y_dia = df_clean["dia_ref"].values
-    
-    print("Features utilizadas:")
-    for i, name in enumerate(feature_names):
-        print(f"  {i}: {name}")
-    
-    return X, y_sys, y_dia, feature_names
-
-def train_models(X, y_sys, y_dia):
-    """Entrenar modelos de ML"""
-    print("\nIniciando entrenamiento de modelos...")
-    
-    # Escalar features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # División train/test
-    X_train, X_test, y_sys_train, y_sys_test = train_test_split(
-        X_scaled, y_sys, test_size=0.2, random_state=42
-    )
-    _, _, y_dia_train, y_dia_test = train_test_split(
-        X_scaled, y_dia, test_size=0.2, random_state=42
-    )
-    
-    print(f"Datos entrenamiento: {len(X_train)} muestras")
-    print(f"Datos prueba: {len(X_test)} muestras")
-    
-    # Entrenar modelo sistólica
-    modelo_sys = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_sys.fit(X_train, y_sys_train)
-    
-    # Entrenar modelo diastólica
-    modelo_dia = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_dia.fit(X_train, y_dia_train)
-    
-    print("Modelos entrenados exitosamente")
-    
-    return modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test
-
-def evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test):
-    """Evaluar rendimiento de los modelos"""
-    print("\nEvaluando modelos...")
-    
-    # Predicciones
-    pred_sys = modelo_sys.predict(X_test)
-    pred_dia = modelo_dia.predict(X_test)
-    
-    # Métricas sistólica
-    mae_sys = mean_absolute_error(y_sys_test, pred_sys)
-    r2_sys = r2_score(y_sys_test, pred_sys)
-    
-    # Métricas diastólica  
-    mae_dia = mean_absolute_error(y_dia_test, pred_dia)
-    r2_dia = r2_score(y_dia_test, pred_dia)
-    
-    print(f"SISTÓLICA - MAE: {mae_sys:.2f} mmHg, R²: {r2_sys:.3f}")
-    print(f"DIASTÓLICA - MAE: {mae_dia:.2f} mmHg, R²: {r2_dia:.3f}")
-    
-    # Verificar rango de predicciones
-    print(f"\nRango predicciones SYS: {pred_sys.min():.1f} - {pred_sys.max():.1f}")
-    print(f"Rango predicciones DIA: {pred_dia.min():.1f} - {pred_dia.max():.1f}")
-    
-    return {
-        'mae_sys': mae_sys,
-        'mae_dia': mae_dia,
-        'r2_sys': r2_sys,
-        'r2_dia': r2_dia
-    }
-
-def save_models(modelo_sys, modelo_dia, scaler):
-    """Guardar modelos entrenados"""
-    print("\nGuardando modelos...")
-    
-    try:
-        joblib.dump(modelo_sys, "models/modelo_sys.pkl")
-        joblib.dump(modelo_dia, "models/modelo_dia.pkl")
-        joblib.dump(scaler, "models/scaler.pkl")
+        # Worker thread para mensajes asíncronos
+        self.worker_thread = None
+        self.should_stop = False
         
-        print("Modelos guardados exitosamente:")
-        print("  - models/modelo_sys.pkl")
-        print("  - models/modelo_dia.pkl") 
-        print("  - models/scaler.pkl")
+        # Configurar logging
+        self.logger.info("WebSocket Handler inicializado")
         
-        # Verificar tamaños de archivos
-        for filename in ["modelo_sys.pkl", "modelo_dia.pkl", "scaler.pkl"]:
-            filepath = f"models/{filename}"
-            size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            print(f"  {filename}: {size_mb:.2f} MB")
+        # Inicializar worker si hay socketio disponible
+        if self.socketio:
+            self._start_worker_thread()
+    
+    def set_socketio(self, socketio_instance):
+        """Configurar instancia de SocketIO"""
+        self.socketio = socketio_instance
+        if not self.worker_thread:
+            self._start_worker_thread()
+        self.logger.info("SocketIO configurado en WebSocket Handler")
+    
+    def _start_worker_thread(self):
+        """Iniciar hilo trabajador para mensajes asíncronos"""
+        if self.socketio:
+            self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+            self.worker_thread.start()
+            self.logger.info("Worker thread WebSocket iniciado")
+    
+    def _worker_loop(self):
+        """Loop principal del worker thread"""
+        while not self.should_stop:
+            try:
+                # Obtener mensaje de la cola
+                message_data = self.message_queue.get(timeout=1)
+                
+                # Procesar mensaje
+                self._process_queued_message(message_data)
+                
+                # Marcar como completado
+                self.message_queue.task_done()
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"Error en worker WebSocket: {e}")
+    
+    def _process_queued_message(self, message_data):
+        """Procesar mensaje de la cola"""
+        try:
+            event_name = message_data.get('event')
+            data = message_data.get('data')
+            room = message_data.get('room')
             
-    except Exception as e:
-        raise Exception(f"Error guardando modelos: {e}")
-
-def test_models_integration():
-    """Probar que los modelos funcionen correctamente"""
-    print("\nProbando integración de modelos...")
+            if self.socketio:
+                if room:
+                    self.socketio.emit(event_name, data, room=room)
+                else:
+                    self.socketio.emit(event_name, data)
+                
+                self.messages_sent += 1
+                self.last_message_time = time.time()
+                self.logger.debug(f"Mensaje WebSocket enviado: {event_name}")
+            
+        except Exception as e:
+            self.logger.error(f"Error enviando mensaje WebSocket: {e}")
+            self.messages_failed += 1
     
-    try:
-        # Cargar modelos
-        modelo_sys = joblib.load("models/modelo_sys.pkl")
-        modelo_dia = joblib.load("models/modelo_dia.pkl")
-        scaler = joblib.load("models/scaler.pkl")
+    def emit_update(self, data, event_name='update_data'):
+        """Emitir actualización de datos a todos los clientes"""
+        if not self.socketio:
+            self.logger.warning("SocketIO no configurado")
+            return False
         
-        # Datos de prueba (valores típicos)
-        test_features = np.array([[
-            75,    # hr_promedio_sensor
-            98,    # spo2_promedio_sensor
-            1250,  # ir_mean_filtrado
-            890,   # red_mean_filtrado
-            15,    # ir_std_filtrado
-            12     # red_std_filtrado
-        ]])
+        try:
+            # Validar y preparar datos
+            clean_data = self._prepare_data_for_emit(data)
+            
+            # Verificar rate limiting
+            if self._check_rate_limit('global'):
+                # Enviar inmediatamente si la cola está vacía
+                if self.message_queue.empty():
+                    self.socketio.emit(event_name, clean_data)
+                    self.messages_sent += 1
+                    self.last_message_time = time.time()
+                else:
+                    # Añadir a cola si hay backlog
+                    self._queue_message(event_name, clean_data)
+                
+                self.logger.debug(f"Datos actualizados vía WebSocket: {event_name}")
+                return True
+            else:
+                self.logger.warning("Rate limit alcanzado para emisiones")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error emitiendo actualización: {e}")
+            self.messages_failed += 1
+            return False
+    
+    def emit_capture_count(self, count):
+        """Emitir contador de muestras capturadas"""
+        return self.emit_update({'count': count}, 'capture_count_update')
+    
+    def emit_new_record_saved(self):
+        """Notificar que se guardó un nuevo registro"""
+        return self.emit_update({'timestamp': datetime.now().isoformat()}, 'new_record_saved')
+    
+    def emit_alert(self, alert_data):
+        """Emitir alerta médica"""
+        alert_message = {
+            'type': 'medical_alert',
+            'level': alert_data.get('level', 'info'),
+            'patient_id': alert_data.get('patient_id'),
+            'message': alert_data.get('message', ''),
+            'timestamp': datetime.now().isoformat(),
+            'data': alert_data
+        }
+        return self.emit_update(alert_message, 'medical_alert')
+    
+    def emit_system_status(self, status_data):
+        """Emitir estado del sistema"""
+        status_message = {
+            'timestamp': datetime.now().isoformat(),
+            'status': status_data
+        }
+        return self.emit_update(status_message, 'system_status')
+    
+    def emit_error(self, error_message, error_type='general'):
+        """Emitir mensaje de error"""
+        error_data = {
+            'type': error_type,
+            'message': error_message,
+            'timestamp': datetime.now().isoformat()
+        }
+        return self.emit_update(error_data, 'error_message')
+    
+    def emit_to_room(self, room, event_name, data):
+        """Emitir mensaje a una sala específica"""
+        if not self.socketio:
+            return False
         
-        # Escalar y predecir
-        test_scaled = scaler.transform(test_features)
-        sys_pred = modelo_sys.predict(test_scaled)[0]
-        dia_pred = modelo_dia.predict(test_scaled)[0]
+        try:
+            clean_data = self._prepare_data_for_emit(data)
+            self._queue_message(event_name, clean_data, room)
+            return True
+        except Exception as e:
+            self.logger.error(f"Error emitiendo a sala {room}: {e}")
+            return False
+    
+    def _queue_message(self, event_name, data, room=None):
+        """Añadir mensaje a la cola"""
+        if self.message_queue.qsize() >= self.max_queue_size:
+            self.logger.warning("Cola de mensajes WebSocket llena, descartando mensaje más antiguo")
+            try:
+                self.message_queue.get_nowait()
+            except queue.Empty:
+                pass
         
-        print(f"Prueba con datos típicos:")
-        print(f"  HR: 75, SpO2: 98, IR: 1250, RED: 890")
-        print(f"  Predicción → SYS: {sys_pred:.1f}, DIA: {dia_pred:.1f}")
+        message_data = {
+            'event': event_name,
+            'data': data,
+            'room': room,
+            'timestamp': time.time()
+        }
         
-        # Validar que las predicciones sean razonables
-        if 90 <= sys_pred <= 200 and 60 <= dia_pred <= 120:
-            print("Predicciones en rango normal")
+        self.message_queue.put(message_data)
+    
+    def _prepare_data_for_emit(self, data):
+        """Preparar datos para emisión (limpiar y validar)"""
+        if isinstance(data, dict):
+            # Limpiar valores None y convertir tipos problemáticos
+            clean_data = {}
+            for key, value in data.items():
+                if value is not None:
+                    if isinstance(value, (int, float, str, bool, list, dict)):
+                        clean_data[key] = value
+                    else:
+                        clean_data[key] = str(value)
+            return clean_data
+        elif isinstance(data, (list, str, int, float, bool)):
+            return data
         else:
-            print("Predicciones fuera de rango esperado")
+            return str(data)
+    
+    def _check_rate_limit(self, client_id):
+        """Verificar rate limiting para evitar spam"""
+        current_time = time.time()
+        
+        with self.handler_lock:
+            # Limpiar entradas antiguas
+            cutoff_time = current_time - 60  # 1 minuto
+            self.rate_limits[client_id] = [
+                t for t in self.rate_limits[client_id] 
+                if t > cutoff_time
+            ]
             
-        return True
+            # Verificar límite
+            if len(self.rate_limits[client_id]) >= self.max_messages_per_minute:
+                return False
+            
+            # Registrar nuevo mensaje
+            self.rate_limits[client_id].append(current_time)
+            return True
+    
+    def handle_client_connect(self, client_id, client_info=None):
+        """Manejar conexión de cliente"""
+        with self.handler_lock:
+            self.connected_clients.add(client_id)
+            if client_info:
+                self.client_info[client_id] = {
+                    **client_info,
+                    'connected_at': datetime.now().isoformat(),
+                    'messages_sent': 0
+                }
         
-    except Exception as e:
-        print(f"Error en test de integración: {e}")
-        return False
-
-def generate_feature_importance(modelo_sys, modelo_dia, feature_names):
-    """Generar análisis de importancia de features"""
-    print("\nAnalizando importancia de features...")
-    
-    # Importancia sistólica
-    importance_sys = modelo_sys.feature_importances_
-    importance_dia = modelo_dia.feature_importances_
-    
-    print("\nImportancia features para SISTÓLICA:")
-    for name, importance in zip(feature_names, importance_sys):
-        print(f"  {name}: {importance:.3f}")
-    
-    print("\nImportancia features para DIASTÓLICA:")
-    for name, importance in zip(feature_names, importance_dia):
-        print(f"  {name}: {importance:.3f}")
-
-def main():
-    """Función principal"""
-    print("ENTRENAMIENTO DE MODELOS ML - VERSIÓN CORREGIDA")
-    print("=" * 60)
-    
-    try:
-        # 1. Configurar directorios
-        setup_directories()
+        self.logger.info(f"Cliente WebSocket conectado: {client_id}")
         
-        # 2. Cargar datos (buscar en ubicaciones posibles)
-        csv_paths = [
-            "data/entrenamiento_ml.csv",
-            "entrenamiento_ml.csv",
-            "../entrenamiento_ml.csv"
-        ]
+        # Enviar estado inicial al cliente
+        self.emit_system_status({
+            'message': 'Conectado al sistema de monitoreo',
+            'client_id': client_id,
+            'server_time': datetime.now().isoformat()
+        })
+    
+    def handle_client_disconnect(self, client_id):
+        """Manejar desconexión de cliente"""
+        with self.handler_lock:
+            self.connected_clients.discard(client_id)
+            if client_id in self.client_info:
+                connection_duration = time.time() - time.mktime(
+                    datetime.fromisoformat(self.client_info[client_id]['connected_at']).timetuple()
+                )
+                self.logger.info(f"Cliente {client_id} desconectado después de {connection_duration:.1f}s")
+                del self.client_info[client_id]
+            
+            # Limpiar rate limits
+            if client_id in self.rate_limits:
+                del self.rate_limits[client_id]
         
-        df = None
-        for csv_path in csv_paths:
-            if os.path.exists(csv_path):
-                print(f"Usando archivo: {csv_path}")
-                df, required_columns = load_and_validate_data(csv_path)
+        self.logger.info(f"Cliente WebSocket desconectado: {client_id}")
+    
+    def get_connected_clients_count(self):
+        """Obtener número de clientes conectados"""
+        return len(self.connected_clients)
+    
+    def get_status(self):
+        """Obtener estado del manejador WebSocket"""
+        return {
+            'socketio_configured': self.socketio is not None,
+            'connected_clients': len(self.connected_clients),
+            'messages_sent': self.messages_sent,
+            'messages_failed': self.messages_failed,
+            'success_rate': self.messages_sent / max(self.messages_sent + self.messages_failed, 1),
+            'queue_size': self.message_queue.qsize(),
+            'last_message': datetime.fromtimestamp(self.last_message_time).isoformat() if self.last_message_time else None,
+            'worker_active': self.worker_thread is not None and self.worker_thread.is_alive()
+        }
+    
+    def get_performance_metrics(self):
+        """Obtener métricas detalladas de rendimiento"""
+        current_time = time.time()
+        
+        # Calcular mensajes por minuto
+        recent_messages = []
+        for timestamps in self.rate_limits.values():
+            recent_messages.extend([t for t in timestamps if current_time - t < 3600])  # última hora
+        
+        messages_last_hour = len(recent_messages)
+        
+        return {
+            'total_messages_sent': self.messages_sent,
+            'total_messages_failed': self.messages_failed,
+            'messages_last_hour': messages_last_hour,
+            'avg_messages_per_minute': messages_last_hour / 60,
+            'queue_utilization': self.message_queue.qsize() / self.max_queue_size,
+            'active_rate_limits': len(self.rate_limits),
+            'client_stats': {
+                'total_connected': len(self.connected_clients),
+                'client_details': [
+                    {
+                        'id': client_id,
+                        'connected_duration_minutes': (current_time - time.mktime(
+                            datetime.fromisoformat(info['connected_at']).timetuple()
+                        )) / 60,
+                        'messages_sent': info.get('messages_sent', 0)
+                    }
+                    for client_id, info in self.client_info.items()
+                ]
+            }
+        }
+    
+    def broadcast_system_message(self, message, message_type='info'):
+        """Enviar mensaje del sistema a todos los clientes"""
+        system_message = {
+            'type': 'system_message',
+            'level': message_type,
+            'message': message,
+            'timestamp': datetime.now().isoformat()
+        }
+        return self.emit_update(system_message, 'system_message')
+    
+    def send_heartbeat(self):
+        """Enviar heartbeat a clientes conectados"""
+        heartbeat_data = {
+            'timestamp': datetime.now().isoformat(),
+            'server_status': 'online',
+            'connected_clients': len(self.connected_clients)
+        }
+        return self.emit_update(heartbeat_data, 'heartbeat')
+    
+    def clear_message_queue(self):
+        """Limpiar cola de mensajes"""
+        cleared_count = self.message_queue.qsize()
+        
+        while not self.message_queue.empty():
+            try:
+                self.message_queue.get_nowait()
+            except queue.Empty:
                 break
         
-        if df is None:
-            raise FileNotFoundError("No se encontró entrenamiento_ml.csv en ninguna ubicación")
-        
-        # 3. Preprocesar
-        X, y_sys, y_dia, feature_names = preprocess_data(df, required_columns)
-        
-        # 4. Entrenar
-        modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test = train_models(X, y_sys, y_dia)
-        
-        # 5. Evaluar
-        metrics = evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test)
-        
-        # 6. Análisis de features
-        generate_feature_importance(modelo_sys, modelo_dia, feature_names)
-        
-        # 7. Guardar
-        save_models(modelo_sys, modelo_dia, scaler)
-        
-        # 8. Test de integración
-        if test_models_integration():
-            print("\nENTRENAMIENTO COMPLETADO EXITOSAMENTE")
-            print("Los modelos están listos para usar en producción")
-        else:
-            print("\nFALLÓ EL TEST DE INTEGRACIÓN")
-            
-        print(f"\nRESUMEN:")
-        print(f"  • Muestras procesadas: {len(X)}")
-        print(f"  • MAE Sistólica: {metrics['mae_sys']:.2f} mmHg")
-        print(f"  • MAE Diastólica: {metrics['mae_dia']:.2f} mmHg")
-        print(f"  • R² Sistólica: {metrics['r2_sys']:.3f}")
-        print(f"  • R² Diastólica: {metrics['r2_dia']:.3f}")
-        
-    except Exception as e:
-        print(f"\nERROR DURANTE EL ENTRENAMIENTO: {e}")
+        self.logger.info(f"Cola de mensajes WebSocket limpiada: {cleared_count} mensajes")
+        return cleared_count
+    
+    def update_client_info(self, client_id, info_update):
+        """Actualizar información de un cliente"""
+        if client_id in self.client_info:
+            self.client_info[client_id].update(info_update)
+            return True
         return False
     
-    return True
-
-if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    def get_client_info(self, client_id):
+        """Obtener información de un cliente específico"""
+        return self.client_info.get(client_id, {})
+    
+    def configure_rate_limiting(self, max_messages_per_minute=None, max_queue_size=None):
+        """Configurar parámetros de rate limiting"""
+        if max_messages_per_minute is not None:
+            self.max_messages_per_minute = max_messages_per_minute
+            self.logger.info(f"Rate limit actualizado: {max_messages_per_minute} msg/min")
+        
+        if max_queue_size is not None:
+            self.max_queue_size = max_queue_size
+            self.logger.info(f"Tamaño máximo de cola actualizado: {max_queue_size}")
+    
+    def emit_data_batch(self, data_list, event_name='batch_update', batch_size=10):
+        """Emitir datos en lotes para evitar saturar la conexión"""
+        if not data_list:
+            return True
+        
+        try:
+            total_batches = len(data_list) // batch_size + (1 if len(data_list) % batch_size else 0)
+            
+            for i in range(0, len(data_list), batch_size):
+                batch = data_list[i:i + batch_size]
+                batch_data = {
+                    'batch_number': i // batch_size + 1,
+                    'total_batches': total_batches,
+                    'data': batch,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                if not self.emit_update(batch_data, event_name):
+                    return False
+                
+                # Pequeña pausa entre lotes
+                time.sleep(0.1)
+            
+            self.logger.info(f"Datos enviados en {total_batches} lotes")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error enviando datos en lotes: {e}")
+            return False
+    
+    def register_event_handlers(self):
+        """Registrar manejadores de eventos WebSocket"""
+        if not self.socketio:
+            self.logger.warning("No se puede registrar handlers sin SocketIO")
+            return
+        
+        @self.socketio.on('connect')
+        def handle_connect():
+            client_id = request.sid if 'request' in globals() else 'unknown'
+            self.handle_client_connect(client_id)
+        
+        @self.socketio.on('disconnect')
+        def handle_disconnect():
+            client_id = request.sid if 'request' in globals() else 'unknown'
+            self.handle_client_disconnect(client_id)
+        
+        @self.socketio.on('client_info')
+        def handle_client_info(data):
+            client_id = request.sid if 'request' in globals() else 'unknown'
+            self.update_client_info(client_id, data)
+        
+        @self.socketio.on('request_status')
+        def handle_status_request():
+            status = self.get_status()
+            self.emit_system_status(status)
+        
+        self.logger.info("Event handlers WebSocket registrados")
+    
+    def shutdown(self):
+        """Apagar manejador WebSocket de forma segura"""
+        self.logger.info("Iniciando apagado del WebSocket Handler...")
+        
+        # Detener worker thread
+        self.should_stop = True
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=5)
+        
+        # Enviar mensaje de despedida a clientes
+        if self.socketio and self.connected_clients:
+            self.broadcast_system_message("Servidor cerrando conexión", "warning")
+            time.sleep(1)  # Dar tiempo para enviar el mensaje
+        
+        # Limpiar datos
+        with self.handler_lock:
+            self.connected_clients.clear()
+            self.client_info.clear()
+            self.rate_limits.clear()
+        
+        # Limpiar cola
+        cleared = self.clear_message_queue()
+        
+        self.logger.info(f"WebSocket Handler cerrado. {cleared} mensajes pendientes procesados")
+    
+    def __del__(self):
+        """Limpieza al destruir el objeto"""
+        if hasattr(self, 'should_stop'):
+            self.should_stop = True
