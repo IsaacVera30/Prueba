@@ -1,309 +1,520 @@
-# train.py - VERSIÓN SIMPLIFICADA
-# Script de entrenamiento sin dependencias extra
+# modules/alert_system.py
+# Sistema especializado para manejo de alertas médicas
 
-import pandas as pd
-import numpy as np
-import joblib
 import os
-from pathlib import Path
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, r2_score
+import threading
+import time
+import logging
+import urllib.request
+import urllib.parse
+from datetime import datetime, timedelta
+from collections import defaultdict
+import queue
 
-def setup_directories():
-    """Crear directorios necesarios"""
-    Path("models").mkdir(exist_ok=True)
-    print("Directorios verificados")
-
-def load_and_validate_data(csv_path):
-    """Cargar y validar datos de entrenamiento"""
-    try:
-        df = pd.read_csv(csv_path)
-        print(f"Datos cargados: {len(df)} muestras")
+class AlertSystem:
+    """Sistema de alertas médicas con diferentes canales de notificación"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
         
-        # Verificar columnas requeridas
-        required_columns = [
-            "hr_promedio_sensor",
-            "spo2_promedio_sensor", 
-            "ir_mean_filtrado",     
-            "red_mean_filtrado",     
-            "ir_std_filtrado",
-            "red_std_filtrado",
-            "sys_ref",
-            "dia_ref"
-        ]
+        # Configuración de WhatsApp (CallMeBot)
+        self.whatsapp_api_key = os.environ.get("CALLMEBOT_API_KEY")
+        self.whatsapp_phone = os.environ.get("CALLMEBOT_PHONE_NUMBER")
         
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Columnas faltantes: {missing_columns}")
+        # Configuración de email (si está disponible)
+        self.email_enabled = False  # Implementar si es necesario
         
-        print("Todas las columnas requeridas están presentes")
+        # Control de rate limiting (evitar spam)
+        self.alert_history = defaultdict(list)
+        self.min_alert_interval = 300  # 5 minutos entre alertas del mismo tipo
+        self.max_alerts_per_hour = 10
         
-        # Mostrar estadísticas básicas
-        print("\nEstadísticas de los datos:")
-        print(f"HR promedio: {df['hr_promedio_sensor'].mean():.1f} ± {df['hr_promedio_sensor'].std():.1f}")
-        print(f"SpO2 promedio: {df['spo2_promedio_sensor'].mean():.1f} ± {df['spo2_promedio_sensor'].std():.1f}")
-        print(f"SYS promedio: {df['sys_ref'].mean():.1f} ± {df['sys_ref'].std():.1f}")
-        print(f"DIA promedio: {df['dia_ref'].mean():.1f} ± {df['dia_ref'].std():.1f}")
+        # Cola de alertas para procesamiento asíncrono
+        self.alert_queue = queue.Queue()
+        self.worker_thread = None
+        self.should_stop = False
         
-        return df, required_columns
+        # Métricas
+        self.alerts_sent = 0
+        self.alerts_blocked = 0
+        self.last_alert_time = 0
         
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Archivo no encontrado: {csv_path}")
-    except Exception as e:
-        raise Exception(f"Error cargando datos: {e}")
-
-def preprocess_data(df, feature_columns):
-    """Preprocesar datos para entrenamiento"""
-    # Eliminar filas con valores nulos
-    df_clean = df.dropna(subset=feature_columns + ["sys_ref", "dia_ref"])
-    print(f"Datos después de limpiar NaN: {len(df_clean)} muestras")
-    
-    # Eliminar outliers extremos
-    for col in ["sys_ref", "dia_ref"]:
-        Q1 = df_clean[col].quantile(0.01)
-        Q3 = df_clean[col].quantile(0.99)
-        df_clean = df_clean[(df_clean[col] >= Q1) & (df_clean[col] <= Q3)]
-    
-    print(f"Datos después de eliminar outliers: {len(df_clean)} muestras")
-    
-    # Extraer features y targets
-    feature_names = [
-        "hr_promedio_sensor",
-        "spo2_promedio_sensor",
-        "ir_mean_filtrado",     
-        "red_mean_filtrado",       
-        "ir_std_filtrado",
-        "red_std_filtrado"
-    ]
-    
-    X = df_clean[feature_names].values
-    y_sys = df_clean["sys_ref"].values
-    y_dia = df_clean["dia_ref"].values
-    
-    print("Features utilizadas:")
-    for i, name in enumerate(feature_names):
-        print(f"  {i}: {name}")
-    
-    return X, y_sys, y_dia, feature_names
-
-def train_models(X, y_sys, y_dia):
-    """Entrenar modelos de ML"""
-    print("\nIniciando entrenamiento de modelos...")
-    
-    # Escalar features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # División train/test
-    X_train, X_test, y_sys_train, y_sys_test = train_test_split(
-        X_scaled, y_sys, test_size=0.2, random_state=42
-    )
-    _, _, y_dia_train, y_dia_test = train_test_split(
-        X_scaled, y_dia, test_size=0.2, random_state=42
-    )
-    
-    print(f"Datos entrenamiento: {len(X_train)} muestras")
-    print(f"Datos prueba: {len(X_test)} muestras")
-    
-    # Entrenar modelo sistólica
-    modelo_sys = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_sys.fit(X_train, y_sys_train)
-    
-    # Entrenar modelo diastólica
-    modelo_dia = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    modelo_dia.fit(X_train, y_dia_train)
-    
-    print("Modelos entrenados exitosamente")
-    
-    return modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test
-
-def evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test):
-    """Evaluar rendimiento de los modelos"""
-    print("\nEvaluando modelos...")
-    
-    # Predicciones
-    pred_sys = modelo_sys.predict(X_test)
-    pred_dia = modelo_dia.predict(X_test)
-    
-    # Métricas sistólica
-    mae_sys = mean_absolute_error(y_sys_test, pred_sys)
-    r2_sys = r2_score(y_sys_test, pred_sys)
-    
-    # Métricas diastólica  
-    mae_dia = mean_absolute_error(y_dia_test, pred_dia)
-    r2_dia = r2_score(y_dia_test, pred_dia)
-    
-    print(f"SISTÓLICA - MAE: {mae_sys:.2f} mmHg, R²: {r2_sys:.3f}")
-    print(f"DIASTÓLICA - MAE: {mae_dia:.2f} mmHg, R²: {r2_dia:.3f}")
-    
-    # Verificar rango de predicciones
-    print(f"\nRango predicciones SYS: {pred_sys.min():.1f} - {pred_sys.max():.1f}")
-    print(f"Rango predicciones DIA: {pred_dia.min():.1f} - {pred_dia.max():.1f}")
-    
-    return {
-        'mae_sys': mae_sys,
-        'mae_dia': mae_dia,
-        'r2_sys': r2_sys,
-        'r2_dia': r2_dia
-    }
-
-def save_models(modelo_sys, modelo_dia, scaler):
-    """Guardar modelos entrenados"""
-    print("\nGuardando modelos...")
-    
-    try:
-        joblib.dump(modelo_sys, "models/modelo_sys.pkl")
-        joblib.dump(modelo_dia, "models/modelo_dia.pkl")
-        joblib.dump(scaler, "models/scaler.pkl")
+        # Lock para thread safety
+        self.alert_lock = threading.Lock()
         
-        print("Modelos guardados exitosamente:")
-        print("  - models/modelo_sys.pkl")
-        print("  - models/modelo_dia.pkl") 
-        print("  - models/scaler.pkl")
+        # Configuración de niveles de alerta
+        self.alert_levels = {
+            "HT Crisis": {
+                "priority": "critical",
+                "channels": ["whatsapp", "log"],
+                "template": "CRISIS HIPERTENSIVA\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nATENCION MEDICA INMEDIATA!"
+            },
+            "HT2": {
+                "priority": "high", 
+                "channels": ["whatsapp", "log"],
+                "template": "Hipertension Grado 2\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nConsultar medico pronto."
+            },
+            "HT1": {
+                "priority": "medium",
+                "channels": ["log"],
+                "template": "Hipertension Grado 1\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nMonitorear de cerca."
+            }
+        }
         
-        # Verificar tamaños de archivos
-        for filename in ["modelo_sys.pkl", "modelo_dia.pkl", "scaler.pkl"]:
-            filepath = f"models/{filename}"
-            size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            print(f"  {filename}: {size_mb:.2f} MB")
-            
-    except Exception as e:
-        raise Exception(f"Error guardando modelos: {e}")
-
-def test_models_integration():
-    """Probar que los modelos funcionen correctamente"""
-    print("\nProbando integración de modelos...")
+        # Inicializar sistema
+        self._start_worker_thread()
+        self._log_configuration()
     
-    try:
-        # Cargar modelos
-        modelo_sys = joblib.load("models/modelo_sys.pkl")
-        modelo_dia = joblib.load("models/modelo_dia.pkl")
-        scaler = joblib.load("models/scaler.pkl")
+    def _log_configuration(self):
+        """Mostrar configuración del sistema de alertas"""
+        self.logger.info("Sistema de alertas inicializado")
         
-        # Datos de prueba (valores típicos)
-        test_features = np.array([[
-            75,    # hr_promedio_sensor
-            98,    # spo2_promedio_sensor
-            1250,  # ir_mean_filtrado
-            890,   # red_mean_filtrado
-            15,    # ir_std_filtrado
-            12     # red_std_filtrado
-        ]])
-        
-        # Escalar y predecir
-        test_scaled = scaler.transform(test_features)
-        sys_pred = modelo_sys.predict(test_scaled)[0]
-        dia_pred = modelo_dia.predict(test_scaled)[0]
-        
-        print(f"Prueba con datos típicos:")
-        print(f"  HR: 75, SpO2: 98, IR: 1250, RED: 890")
-        print(f"  Predicción → SYS: {sys_pred:.1f}, DIA: {dia_pred:.1f}")
-        
-        # Validar que las predicciones sean razonables
-        if 90 <= sys_pred <= 200 and 60 <= dia_pred <= 120:
-            print("Predicciones en rango normal")
+        if self.whatsapp_api_key and self.whatsapp_phone:
+            self.logger.info("WhatsApp configurado")
         else:
-            print("Predicciones fuera de rango esperado")
+            self.logger.warning("WhatsApp no configurado (falta API key o teléfono)")
+        
+        self.logger.info(f"Niveles de alerta configurados: {list(self.alert_levels.keys())}")
+    
+    def _start_worker_thread(self):
+        """Iniciar hilo trabajador para envío de alertas"""
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
+        self.logger.info("Hilo trabajador de alertas iniciado")
+    
+    def _worker_loop(self):
+        """Loop principal del hilo trabajador"""
+        while not self.should_stop:
+            try:
+                # Obtener alerta de la cola
+                alert_data = self.alert_queue.get(timeout=1)
+                
+                # Procesar alerta
+                self._process_alert(alert_data)
+                
+                # Marcar tarea como completada
+                self.alert_queue.task_done()
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"Error en worker de alertas: {e}")
+    
+    def check_and_send_alert(self, measurement_data):
+        """
+        Verificar medición y enviar alerta si es necesario
+        
+        Args:
+            measurement_data: Dict con datos de la medición
+        """
+        nivel = measurement_data.get('nivel', '')
+        patient_id = measurement_data.get('patient_id', 'Desconocido')
+        
+        # Solo alertar para niveles críticos
+        if nivel not in self.alert_levels:
+            return
+        
+        # Verificar rate limiting
+        if not self._should_send_alert(nivel, patient_id):
+            self.alerts_blocked += 1
+            self.logger.debug(f"Alerta bloqueada por rate limiting: {nivel}")
+            return
+        
+        # Preparar datos de alerta
+        alert_data = {
+            'level': nivel,
+            'patient_id': patient_id,
+            'sys': measurement_data.get('sys', 0),
+            'dia': measurement_data.get('dia', 0),
+            'hr': measurement_data.get('hr', 0),
+            'spo2': measurement_data.get('spo2', 0),
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'priority': self.alert_levels[nivel]['priority']
+        }
+        
+        # Añadir a cola para procesamiento asíncrono
+        self.alert_queue.put(alert_data)
+        self.logger.info(f"Alerta añadida a cola: {nivel} - Paciente {patient_id}")
+    
+    def _should_send_alert(self, nivel, patient_id):
+        """Verificar si se debe enviar alerta basado en rate limiting"""
+        with self.alert_lock:
+            current_time = time.time()
+            alert_key = f"{nivel}_{patient_id}"
             
-        return True
+            # Limpiar alertas antiguas
+            self._cleanup_old_alerts(current_time)
+            
+            # Verificar interval mínimo
+            if alert_key in self.alert_history:
+                last_alert = max(self.alert_history[alert_key])
+                if current_time - last_alert < self.min_alert_interval:
+                    return False
+            
+            # Verificar máximo por hora
+            recent_alerts = [
+                t for alerts in self.alert_history.values() 
+                for t in alerts 
+                if current_time - t < 3600
+            ]
+            
+            if len(recent_alerts) >= self.max_alerts_per_hour:
+                return False
+            
+            # Registrar nueva alerta
+            self.alert_history[alert_key].append(current_time)
+            return True
+    
+    def _cleanup_old_alerts(self, current_time):
+        """Limpiar alertas antiguas del historial"""
+        cutoff_time = current_time - 3600  # 1 hora
         
-    except Exception as e:
-        print(f"Error en test de integración: {e}")
+        for key in list(self.alert_history.keys()):
+            self.alert_history[key] = [
+                t for t in self.alert_history[key] 
+                if t > cutoff_time
+            ]
+            
+            # Eliminar claves vacías
+            if not self.alert_history[key]:
+                del self.alert_history[key]
+    
+    def _process_alert(self, alert_data):
+        """Procesar una alerta específica"""
+        try:
+            nivel = alert_data['level']
+            config = self.alert_levels[nivel]
+            channels = config['channels']
+            template = config['template']
+            
+            # Formatear mensaje
+            message = template.format(**alert_data)
+            
+            # Enviar por cada canal configurado
+            success_channels = []
+            failed_channels = []
+            
+            for channel in channels:
+                try:
+                    if channel == "whatsapp":
+                        success = self._send_whatsapp_alert(message)
+                    elif channel == "log":
+                        success = self._send_log_alert(message, alert_data['priority'])
+                    elif channel == "email":
+                        success = self._send_email_alert(message, alert_data)
+                    else:
+                        success = False
+                        self.logger.warning(f"Canal desconocido: {channel}")
+                    
+                    if success:
+                        success_channels.append(channel)
+                    else:
+                        failed_channels.append(channel)
+                        
+                except Exception as e:
+                    self.logger.error(f"Error enviando por {channel}: {e}")
+                    failed_channels.append(channel)
+            
+            # Actualizar métricas
+            if success_channels:
+                self.alerts_sent += 1
+                self.last_alert_time = time.time()
+                self.logger.info(f"Alerta enviada: {nivel} - Canales: {success_channels}")
+            
+            if failed_channels:
+                self.logger.warning(f"Canales fallidos: {failed_channels}")
+                
+        except Exception as e:
+            self.logger.error(f"Error procesando alerta: {e}")
+    
+    def _send_whatsapp_alert(self, message):
+        """Enviar alerta por WhatsApp usando CallMeBot"""
+        if not (self.whatsapp_api_key and self.whatsapp_phone):
+            self.logger.debug("WhatsApp no configurado")
+            return False
+        
+        try:
+            # Preparar URL
+            encoded_message = urllib.parse.quote(message)
+            url = (
+                f"https://api.callmebot.com/whatsapp.php?"
+                f"phone={self.whatsapp_phone}&"
+                f"text={encoded_message}&"
+                f"apikey={self.whatsapp_api_key}"
+            )
+            
+            # Enviar con timeout
+            with urllib.request.urlopen(url, timeout=10) as response:
+                response_text = response.read().decode('utf-8')
+                
+                if response.status == 200:
+                    self.logger.info("Alerta WhatsApp enviada exitosamente")
+                    return True
+                else:
+                    self.logger.error(f"Error WhatsApp: {response.status} - {response_text}")
+                    return False
+                    
+        except Exception as e:
+            self.logger.error(f"Error enviando WhatsApp: {e}")
+            return False
+    
+    def _send_log_alert(self, message, priority):
+        """Registrar alerta en logs"""
+        try:
+            if priority == "critical":
+                self.logger.critical(f"ALERTA CRITICA: {message}")
+            elif priority == "high":
+                self.logger.error(f"ALERTA ALTA: {message}")
+            elif priority == "medium":
+                self.logger.warning(f"ALERTA MEDIA: {message}")
+            else:
+                self.logger.info(f"ALERTA: {message}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error registrando en log: {e}")
+            return False
+    
+    def _send_email_alert(self, message, alert_data):
+        """Enviar alerta por email (placeholder - implementar si es necesario)"""
+        # TODO: Implementar envío de email si se requiere
+        self.logger.debug("Email no implementado")
         return False
-
-def generate_feature_importance(modelo_sys, modelo_dia, feature_names):
-    """Generar análisis de importancia de features"""
-    print("\nAnalizando importancia de features...")
     
-    # Importancia sistólica
-    importance_sys = modelo_sys.feature_importances_
-    importance_dia = modelo_dia.feature_importances_
-    
-    print("\nImportancia features para SISTÓLICA:")
-    for name, importance in zip(feature_names, importance_sys):
-        print(f"  {name}: {importance:.3f}")
-    
-    print("\nImportancia features para DIASTÓLICA:")
-    for name, importance in zip(feature_names, importance_dia):
-        print(f"  {name}: {importance:.3f}")
-
-def main():
-    """Función principal"""
-    print("ENTRENAMIENTO DE MODELOS ML - VERSIÓN CORREGIDA")
-    print("=" * 60)
-    
-    try:
-        # 1. Configurar directorios
-        setup_directories()
+    def send_test_alert(self, test_type="info"):
+        """Enviar alerta de prueba"""
+        test_data = {
+            'level': 'HT Crisis' if test_type == "critical" else 'HT1',
+            'patient_id': 'TEST_001',
+            'sys': 185 if test_type == "critical" else 135,
+            'dia': 125 if test_type == "critical" else 85,
+            'hr': 95,
+            'spo2': 98,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'priority': 'critical' if test_type == "critical" else 'medium'
+        }
         
-        # 2. Cargar datos (buscar en ubicaciones posibles)
-        csv_paths = [
-            "data/entrenamiento_ml.csv",
-            "entrenamiento_ml.csv",
-            "../entrenamiento_ml.csv"
-        ]
+        # Bypass rate limiting para test
+        with self.alert_lock:
+            self.alert_queue.put(test_data)
+            self.logger.info(f"Alerta de prueba enviada: {test_type}")
+    
+    def get_status(self):
+        """Obtener estado del sistema de alertas"""
+        return {
+            "configured": self.is_configured(),
+            "whatsapp_available": bool(self.whatsapp_api_key and self.whatsapp_phone),
+            "email_available": self.email_enabled,
+            "alerts_sent": self.alerts_sent,
+            "alerts_blocked": self.alerts_blocked,
+            "queue_size": self.alert_queue.qsize(),
+            "last_alert": datetime.fromtimestamp(self.last_alert_time).isoformat() if self.last_alert_time else None,
+            "active_histories": len(self.alert_history)
+        }
+    
+    def get_alert_history(self, hours=24):
+        """Obtener historial de alertas recientes"""
+        current_time = time.time()
+        cutoff_time = current_time - (hours * 3600)
         
-        df = None
-        for csv_path in csv_paths:
-            if os.path.exists(csv_path):
-                print(f"Usando archivo: {csv_path}")
-                df, required_columns = load_and_validate_data(csv_path)
+        recent_alerts = []
+        for alert_key, timestamps in self.alert_history.items():
+            for timestamp in timestamps:
+                if timestamp > cutoff_time:
+                    level, patient_id = alert_key.split('_', 1)
+                    recent_alerts.append({
+                        'level': level,
+                        'patient_id': patient_id,
+                        'timestamp': datetime.fromtimestamp(timestamp).isoformat(),
+                        'time_ago_minutes': int((current_time - timestamp) / 60)
+                    })
+        
+        # Ordenar por tiempo (más reciente primero)
+        recent_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return {
+            'period_hours': hours,
+            'total_alerts': len(recent_alerts),
+            'alerts': recent_alerts[:50]  # Limitar a 50 más recientes
+        }
+    
+    def is_configured(self):
+        """Verificar si el sistema está configurado correctamente"""
+        return bool(self.whatsapp_api_key and self.whatsapp_phone) or self.email_enabled
+    
+    def update_configuration(self, config):
+        """Actualizar configuración del sistema de alertas"""
+        try:
+            if 'whatsapp_api_key' in config:
+                self.whatsapp_api_key = config['whatsapp_api_key']
+            
+            if 'whatsapp_phone' in config:
+                self.whatsapp_phone = config['whatsapp_phone']
+            
+            if 'min_alert_interval' in config:
+                self.min_alert_interval = int(config['min_alert_interval'])
+            
+            if 'max_alerts_per_hour' in config:
+                self.max_alerts_per_hour = int(config['max_alerts_per_hour'])
+            
+            self.logger.info("Configuración de alertas actualizada")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error actualizando configuración: {e}")
+            return False
+    
+    def add_custom_alert_level(self, level_name, config):
+        """Añadir nivel de alerta personalizado"""
+        try:
+            required_fields = ['priority', 'channels', 'template']
+            if not all(field in config for field in required_fields):
+                raise ValueError(f"Configuración incompleta. Requeridos: {required_fields}")
+            
+            valid_channels = ['whatsapp', 'log', 'email']
+            invalid_channels = [ch for ch in config['channels'] if ch not in valid_channels]
+            if invalid_channels:
+                raise ValueError(f"Canales inválidos: {invalid_channels}")
+            
+            self.alert_levels[level_name] = config
+            self.logger.info(f"Nivel de alerta personalizado añadido: {level_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error añadiendo nivel personalizado: {e}")
+            return False
+    
+    def remove_alert_level(self, level_name):
+        """Remover nivel de alerta"""
+        if level_name in self.alert_levels:
+            del self.alert_levels[level_name]
+            self.logger.info(f"Nivel de alerta removido: {level_name}")
+            return True
+        return False
+    
+    def clear_alert_history(self):
+        """Limpiar historial de alertas"""
+        with self.alert_lock:
+            self.alert_history.clear()
+            self.logger.info("Historial de alertas limpiado")
+    
+    def set_maintenance_mode(self, enabled=True):
+        """Activar/desactivar modo mantenimiento (no envía alertas)"""
+        if enabled:
+            self.maintenance_mode = True
+            self.logger.warning("Modo mantenimiento activado - alertas suspendidas")
+        else:
+            self.maintenance_mode = False
+            self.logger.info("Modo mantenimiento desactivado - alertas reanudadas")
+    
+    def force_send_alert(self, alert_data):
+        """Forzar envío de alerta sin verificar rate limiting"""
+        try:
+            # Preparar datos mínimos si no están completos
+            required_fields = {
+                'level': 'Test',
+                'patient_id': 'Manual',
+                'sys': 0,
+                'dia': 0,
+                'hr': 0,
+                'spo2': 0,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'priority': 'medium'
+            }
+            
+            # Combinar con datos proporcionados
+            final_alert_data = {**required_fields, **alert_data}
+            
+            # Añadir directamente a cola
+            self.alert_queue.put(final_alert_data)
+            self.logger.info(f"Alerta forzada enviada: {final_alert_data['level']}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error enviando alerta forzada: {e}")
+            return False
+    
+    def get_performance_metrics(self):
+        """Obtener métricas detalladas de rendimiento"""
+        with self.alert_lock:
+            current_time = time.time()
+            
+            # Calcular alertas por hora en las últimas 24 horas
+            recent_alerts = []
+            for timestamps in self.alert_history.values():
+                for timestamp in timestamps:
+                    if current_time - timestamp < 86400:  # 24 horas
+                        recent_alerts.append(timestamp)
+            
+            # Agrupar por horas
+            hourly_counts = defaultdict(int)
+            for timestamp in recent_alerts:
+                hour_key = int(timestamp // 3600)
+                hourly_counts[hour_key] += 1
+            
+            # Calcular estadísticas
+            total_recent = len(recent_alerts)
+            avg_per_hour = total_recent / 24 if total_recent > 0 else 0
+            
+            return {
+                'total_alerts_sent': self.alerts_sent,
+                'total_alerts_blocked': self.alerts_blocked,
+                'success_rate': self.alerts_sent / max(self.alerts_sent + self.alerts_blocked, 1),
+                'alerts_last_24h': total_recent,
+                'avg_alerts_per_hour': round(avg_per_hour, 2),
+                'queue_size': self.alert_queue.qsize(),
+                'active_rate_limits': len(self.alert_history),
+                'hourly_distribution': dict(hourly_counts),
+                'uptime_hours': (current_time - getattr(self, 'start_time', current_time)) / 3600
+            }
+    
+    def validate_whatsapp_config(self):
+        """Validar configuración de WhatsApp enviando mensaje de prueba"""
+        if not (self.whatsapp_api_key and self.whatsapp_phone):
+            return {"success": False, "error": "Configuración de WhatsApp incompleta"}
+        
+        try:
+            test_message = "Prueba de configuracion - Sistema de alertas medicas"
+            success = self._send_whatsapp_alert(test_message)
+            
+            if success:
+                return {"success": True, "message": "WhatsApp configurado correctamente"}
+            else:
+                return {"success": False, "error": "Error enviando mensaje de prueba"}
+                
+        except Exception as e:
+            return {"success": False, "error": f"Error validando WhatsApp: {str(e)}"}
+    
+    def shutdown(self):
+        """Apagar sistema de alertas de forma segura"""
+        self.logger.info("Iniciando apagado del sistema de alertas...")
+        
+        # Detener worker thread
+        self.should_stop = True
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=10)
+        
+        # Procesar alertas pendientes críticas
+        critical_alerts = []
+        while not self.alert_queue.empty():
+            try:
+                alert = self.alert_queue.get_nowait()
+                if alert.get('priority') == 'critical':
+                    critical_alerts.append(alert)
+            except queue.Empty:
                 break
         
-        if df is None:
-            raise FileNotFoundError("No se encontró entrenamiento_ml.csv en ninguna ubicación")
+        # Enviar alertas críticas pendientes
+        for alert in critical_alerts:
+            try:
+                self._process_alert(alert)
+            except Exception as e:
+                self.logger.error(f"Error procesando alerta crítica en shutdown: {e}")
         
-        # 3. Preprocesar
-        X, y_sys, y_dia, feature_names = preprocess_data(df, required_columns)
-        
-        # 4. Entrenar
-        modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test = train_models(X, y_sys, y_dia)
-        
-        # 5. Evaluar
-        metrics = evaluate_models(modelo_sys, modelo_dia, scaler, X_test, y_sys_test, y_dia_test)
-        
-        # 6. Análisis de features
-        generate_feature_importance(modelo_sys, modelo_dia, feature_names)
-        
-        # 7. Guardar
-        save_models(modelo_sys, modelo_dia, scaler)
-        
-        # 8. Test de integración
-        if test_models_integration():
-            print("\nENTRENAMIENTO COMPLETADO EXITOSAMENTE")
-            print("Los modelos están listos para usar en producción")
-        else:
-            print("\nFALLÓ EL TEST DE INTEGRACIÓN")
-            
-        print(f"\nRESUMEN:")
-        print(f"  • Muestras procesadas: {len(X)}")
-        print(f"  • MAE Sistólica: {metrics['mae_sys']:.2f} mmHg")
-        print(f"  • MAE Diastólica: {metrics['mae_dia']:.2f} mmHg")
-        print(f"  • R² Sistólica: {metrics['r2_sys']:.3f}")
-        print(f"  • R² Diastólica: {metrics['r2_dia']:.3f}")
-        
-    except Exception as e:
-        print(f"\nERROR DURANTE EL ENTRENAMIENTO: {e}")
-        return False
+        self.logger.info(f"Sistema de alertas cerrado. Alertas críticas procesadas: {len(critical_alerts)}")
     
-    return True
-
-if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    def __del__(self):
+        """Limpieza al destruir el objeto"""
+        if hasattr(self, 'should_stop'):
+            self.should_stop = True
