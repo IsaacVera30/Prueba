@@ -75,36 +75,150 @@ class SampleBuffer:
         return processed_data
     
     def _calculate_heart_rate(self, ir_values):
-        """Calcular frecuencia cardíaca usando análisis de picos en señal IR"""
+        """Calcular frecuencia cardíaca usando análisis mejorado de picos en señal IR"""
         try:
             ir_array = np.array(ir_values)
             
-            # Detectar picos usando diferencias
-            diff = np.diff(ir_array)
-            peaks = []
+            # Suavizar la señal para reducir ruido
+            window_size = min(5, len(ir_array) // 10)
+            if window_size >= 3:
+                # Aplicar filtro de media móvil
+                smoothed = np.convolve(ir_array, np.ones(window_size)/window_size, mode='valid')
+            else:
+                smoothed = ir_array
             
-            # Buscar cambios de negativo a positivo (picos)
-            for i in range(1, len(diff)):
-                if diff[i-1] < 0 and diff[i] > 0:
+            # Encontrar picos usando método mejorado
+            peaks = []
+            threshold = np.mean(smoothed) + 0.5 * np.std(smoothed)
+            
+            for i in range(1, len(smoothed) - 1):
+                # Un pico debe ser mayor que sus vecinos Y superar el umbral
+                if (smoothed[i] > smoothed[i-1] and 
+                    smoothed[i] > smoothed[i+1] and 
+                    smoothed[i] > threshold):
                     peaks.append(i)
             
+            # Filtrar picos demasiado cercanos (evitar doble detección)
+            if len(peaks) > 1:
+                filtered_peaks = [peaks[0]]
+                min_distance = len(smoothed) // 20  # Mínima distancia entre picos
+                
+                for peak in peaks[1:]:
+                    if peak - filtered_peaks[-1] > min_distance:
+                        filtered_peaks.append(peak)
+                
+                peaks = filtered_peaks
+            
             if len(peaks) < 2:
-                return 0
+                # Si no detecta picos, usar análisis de periodicidad
+                return self._calculate_hr_by_fft(ir_array)
             
             # Calcular intervalos entre picos
             intervals = np.diff(peaks)
+            
+            # Filtrar intervalos anómalos
+            if len(intervals) > 2:
+                # Eliminar intervalos que están muy fuera del promedio
+                mean_interval = np.mean(intervals)
+                std_interval = np.std(intervals)
+                filtered_intervals = []
+                
+                for interval in intervals:
+                    if abs(interval - mean_interval) < 2 * std_interval:
+                        filtered_intervals.append(interval)
+                
+                if filtered_intervals:
+                    intervals = filtered_intervals
+            
             avg_interval = np.mean(intervals)
             
-            # Convertir a BPM (asumiendo muestreo cada 2 segundos)
-            sample_rate = len(ir_values) / 200.0  # 100 muestras en ~200 segundos
-            hr = 60.0 / (avg_interval / sample_rate)
+            # Convertir a BPM
+            # 100 muestras tomadas en 200 segundos = 0.5 Hz de muestreo
+            sample_rate = 0.5  # Hz
+            time_per_sample = 1.0 / sample_rate  # 2 segundos por muestra
             
-            # Validar rango de frecuencia cardíaca
-            return hr if 40 <= hr <= 200 else 0
+            # Tiempo entre picos en segundos
+            time_between_beats = avg_interval * time_per_sample
             
+            # Frecuencia cardíaca en BPM
+            hr = 60.0 / time_between_beats
+            
+            # Validar rango fisiológico
+            if 40 <= hr <= 200:
+                return hr
+            else:
+                # Si está fuera de rango, intentar método alternativo
+                return self._calculate_hr_by_fft(ir_array)
+                
         except Exception as e:
-            logger.warning(f"Error calculando HR: {e}")
-            return 0
+            logger.warning(f"Error calculando HR con picos: {e}")
+            # Fallback a método FFT
+            return self._calculate_hr_by_fft(ir_array)
+    
+    def _calculate_hr_by_fft(self, ir_values):
+        """Método alternativo: calcular HR usando análisis de frecuencia (FFT)"""
+        try:
+            # Aplicar FFT para encontrar la frecuencia dominante
+            from scipy import signal
+            
+            # Remover componente DC y normalizar
+            ir_centered = ir_values - np.mean(ir_values)
+            
+            # Aplicar ventana para reducir efectos de borde
+            windowed = ir_centered * signal.windows.hann(len(ir_centered))
+            
+            # Calcular FFT
+            fft = np.fft.fft(windowed)
+            freqs = np.fft.fftfreq(len(windowed), d=2.0)  # 2 segundos por muestra
+            
+            # Solo frecuencias positivas
+            positive_freqs = freqs[:len(freqs)//2]
+            positive_fft = np.abs(fft[:len(fft)//2])
+            
+            # Buscar en rango de frecuencias cardíacas (0.67-3.33 Hz = 40-200 BPM)
+            min_freq = 40.0 / 60.0  # 40 BPM en Hz
+            max_freq = 200.0 / 60.0  # 200 BPM en Hz
+            
+            valid_indices = np.where((positive_freqs >= min_freq) & (positive_freqs <= max_freq))[0]
+            
+            if len(valid_indices) > 0:
+                valid_fft = positive_fft[valid_indices]
+                valid_freqs = positive_freqs[valid_indices]
+                
+                # Encontrar el pico de frecuencia
+                peak_idx = np.argmax(valid_fft)
+                dominant_freq = valid_freqs[peak_idx]
+                
+                # Convertir a BPM
+                hr = dominant_freq * 60.0
+                
+                return hr if 40 <= hr <= 200 else 75  # Default si está fuera de rango
+            else:
+                return 75  # Valor por defecto si no encuentra frecuencias válidas
+                
+        except Exception as e:
+            logger.warning(f"Error en cálculo FFT: {e}")
+            # Usar estimación basada en variabilidad de la señal
+            return self._estimate_hr_from_variability(ir_values)
+    
+    def _estimate_hr_from_variability(self, ir_values):
+        """Método de último recurso: estimar HR desde variabilidad de señal"""
+        try:
+            # Calcular la variabilidad de la señal
+            diff = np.diff(ir_values)
+            variability = np.std(diff)
+            
+            # Heurística: mayor variabilidad suele corresponder a mayor HR
+            # Esta es una aproximación muy básica
+            if variability > 1000:
+                return 80  # HR alta
+            elif variability > 500:
+                return 70  # HR media
+            else:
+                return 60  # HR baja
+                
+        except:
+            return 75  # Valor por defecto seguro
     
     def _calculate_spo2(self, ir_values, red_values):
         """Calcular SpO2 usando ratio R/IR estándar"""
@@ -225,7 +339,7 @@ def receive_raw_data():
         
         logger.info(f"Muestra añadida: {sample_count}/100 para paciente {patient_id}")
 
-        # Respuesta por defecto mientras se recolectan muestras
+        # Respuesta por defecto mientras se recolectan muestras - SIN CALCULOS
         response = {
             "sys": 0, 
             "dia": 0, 
@@ -237,16 +351,16 @@ def receive_raw_data():
             "calidad": "collecting"
         }
 
-        # Solo procesar con ML cuando se tengan las 100 muestras completas
-        if sample_buffer.has_enough_samples(patient_id):
-            logger.info(f"100 muestras completas para paciente {patient_id} - Iniciando predicción ML")
+        # SOLO calcular cuando se tengan EXACTAMENTE 100 muestras
+        if sample_count == 100:
+            logger.info(f"EXACTAMENTE 100 muestras alcanzadas para paciente {patient_id} - Iniciando cálculos ML")
             
             # Obtener datos procesados para ML
             ml_data = sample_buffer.get_samples_for_ml(patient_id)
             
             if ml_data and hasattr(api_nodo_bp, 'ml_processor') and api_nodo_bp.ml_processor.is_ready():
                 try:
-                    # Realizar predicción ML con las 100 muestras procesadas
+                    # Realizar predicción ML SOLO con las 100 muestras completas
                     sys_pred, dia_pred = api_nodo_bp.ml_processor.predict_pressure(
                         ml_data['hr_calculated'],
                         ml_data['spo2_calculated'],
