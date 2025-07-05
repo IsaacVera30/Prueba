@@ -285,7 +285,7 @@ class SampleBuffer:
 # Crear instancia global del buffer de muestras
 sample_buffer = SampleBuffer()
 
-def classify_pressure_level(sys_pressure, dia_pressure):
+    def classify_pressure_level(sys_pressure, dia_pressure):
     """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
     if sys_pressure == 0 or dia_pressure == 0:
         return "Sin datos"
