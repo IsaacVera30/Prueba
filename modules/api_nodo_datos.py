@@ -397,17 +397,18 @@ def receive_raw_data():
                     
                     logger.info(f"Predicción ML completada - SYS:{sys_pred} DIA:{dia_pred} HR:{ml_data['hr_calculated']} SpO2:{ml_data['spo2_calculated']}")
                     
-                    # Guardar medición en base de datos
+                    # Guardar medición en base de datos - CORREGIDO
                     if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
                         measurement_data = {
                             'id_paciente': patient_id,
-                            'sys_ml': sys_pred,
-                            'dia_ml': dia_pred,
+                            'sys': sys_pred,                      # ✅ Campo correcto
+                            'dia': dia_pred,                      # ✅ Campo correcto
                             'hr_ml': ml_data['hr_calculated'],
                             'spo2_ml': ml_data['spo2_calculated'],
-                            'estado': response["nivel"]
+                            'nivel': response["nivel"]            # ✅ Campo correcto
                         }
                         api_nodo_bp.db_manager.save_measurement_async(measurement_data)
+                        logger.info(f"Medición guardada en BD: SYS={sys_pred} DIA={dia_pred}")
                     
                     # Verificar y enviar alertas si es necesario
                     if hasattr(api_nodo_bp, 'alert_system'):
@@ -420,6 +421,10 @@ def receive_raw_data():
                             'spo2': ml_data['spo2_calculated']
                         }
                         api_nodo_bp.alert_system.check_and_send_alert(alert_data)
+                    
+                    # Notificar nuevos datos guardados vía WebSocket
+                    if hasattr(api_nodo_bp, 'websocket_handler'):
+                        api_nodo_bp.websocket_handler.emit_new_record_saved()
                     
                     # Limpiar buffer después de predicción exitosa para reiniciar ciclo
                     sample_buffer.clear_patient_buffer(patient_id)
