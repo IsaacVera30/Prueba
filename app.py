@@ -522,6 +522,30 @@ def create_app():
     """Factory function para compatibilidad con algunos servidores"""
     return medical_app.app
 
+def fix_calibration():
+    """Corregir calibración ML"""
+    try:
+        new_factors = {
+            'sys_global': 0.8889,  # Reduce SYS de ~135 a ~120
+            'dia_global': 1.0541   # Aumenta DIA de ~74 a ~78
+        }
+        
+        result = medical_app.ml_processor.update_calibration_factors(new_factors)
+        if result:
+            print("✓ Calibración ML corregida")
+            print(f"Factor SYS: {new_factors['sys_global']}")
+            print(f"Factor DIA: {new_factors['dia_global']}")
+        else:
+            print("✗ Error aplicando calibración")
+    except Exception as e:
+        print(f"Error en calibración: {e}")
+
+# Aplicar corrección automáticamente al iniciar
+fix_calibration()
+
+
+
+
 if __name__ == "__main__":
     try:
         # Configurar logging más detallado en desarrollo
