@@ -40,7 +40,7 @@ class MLProcessor:
         # CALIBRACIÓN: Factores de corrección basados en validación clínica
         self.calibration_enabled = True
         self.calibration_factors = {
-            'sys_global': 1.065,  # Factor basado en comparación 109/130
+            'sys_global': 0.900,  # Factor basado en comparación 109/130
             'dia_global': 0.884,   # Corrección mínima para diastólica
             'sys_by_range': {
                 (0, 120): 1.065,      # Presión normal: corrección menor
