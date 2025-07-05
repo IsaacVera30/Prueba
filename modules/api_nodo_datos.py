@@ -401,11 +401,11 @@ def receive_raw_data():
                     if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
                         measurement_data = {
                             'id_paciente': patient_id,
-                            'sys': sys_pred,                      # ✅ Campo correcto
-                            'dia': dia_pred,                      # ✅ Campo correcto
+                            'sys': sys_pred,                     
+                            'dia': dia_pred,                     
                             'hr_ml': ml_data['hr_calculated'],
                             'spo2_ml': ml_data['spo2_calculated'],
-                            'nivel': response["nivel"]            # ✅ Campo correcto
+                            'nivel': response["nivel"]           
                         }
                         api_nodo_bp.db_manager.save_measurement_async(measurement_data)
                         logger.info(f"Medición guardada en BD: SYS={sys_pred} DIA={dia_pred}")
