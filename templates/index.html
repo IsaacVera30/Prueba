@@ -136,11 +136,10 @@
                     <th>HR ML</th>
                     <th>SpO2 ML</th>
                     <th>Nivel</th>
-                    <th>Fecha/Hora</th>
                 </tr>
             </thead>
             <tbody>
-                <tr><td colspan="8" style="text-align:center;">Cargando...</td></tr>
+                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
             </tbody>
         </table>
     </div>
@@ -333,15 +332,14 @@
                                 row.insertCell().textContent = med.hr ? Math.round(med.hr) : '---';
                                 row.insertCell().textContent = med.spo2 ? Math.round(med.spo2) : '---';
                                 row.insertCell().textContent = med.nivel || '---';
-                                row.insertCell().textContent = med.fecha_formateada || med.timestamp || '---';
                             });
                         } else {
-                            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No hay datos disponibles.</td></tr>';
+                            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay datos disponibles.</td></tr>';
                         }
                     })
                     .catch(error => {
                         console.error('Error cargando mediciones:', error);
-                        ui.medicionesTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">Error cargando datos: ' + error.message + '</td></tr>';
+                        ui.medicionesTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Error cargando datos: ' + error.message + '</td></tr>';
                     });
             };
 
