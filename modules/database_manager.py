@@ -23,7 +23,7 @@ class DatabaseManager:
             'user': os.environ.get("MYSQLUSER"),
             'password': os.environ.get("MYSQLPASSWORD"),
             'database': os.environ.get("MYSQLDATABASE"),
-            'port': int(os.environ.get("MYSQLPORT", 3306)),
+            'port': int(os.environ.get("MYSQLPORT", 22614)),
             'charset': 'utf8mb4',
             'collation': 'utf8mb4_unicode_ci',
             'autocommit': True
