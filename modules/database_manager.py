@@ -23,7 +23,7 @@ class DatabaseManager:
             'user': os.environ.get("MYSQLUSER"),
             'password': os.environ.get("MYSQLPASSWORD"),
             'database': os.environ.get("MYSQLDATABASE"),
-            'port': int(os.environ.get("MYSQLPORT", 3306)),
+            'port': int(os.environ.get("MYSQLPORT", 22614)),
             'charset': 'utf8mb4',
             'collation': 'utf8mb4_unicode_ci',
             'autocommit': True
@@ -65,6 +65,7 @@ class DatabaseManager:
                 'pool_name': 'medical_monitor_pool',
                 'pool_size': self.pool_size,
                 'pool_reset_session': True,
+                'pool_pre_ping': True,
                 'connect_timeout': 10,
                 'autocommit': True
             }
@@ -175,37 +176,39 @@ class DatabaseManager:
         self.logger.debug(f"Medición añadida a cola BD (queue size: {self.operation_queue.qsize()})")
     
     def _save_measurement_sync(self, data):
-        """Guardar medición sincrónicamente"""
+        """Guardar medición sincrónicamente - ACTUALIZADO para tu estructura"""
         try:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
                 
+                # Query actualizada para tu estructura de tabla
                 query = """
                 INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr_ml, spo2_ml, timestamp_medicion)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """
                 
+                # Valores mapeados a tu estructura
                 values = (
-                    data.get('id_paciente'),
-                    data.get('sys_ml'),
-                    data.get('dia_ml'),
-                    data.get('estado'),
-                    data.get('hr_ml'),
-                    data.get('spo2_ml'),
-                    datetime.now()
+                    data.get('id_paciente', 1),           # id_paciente
+                    data.get('sys_ml', 0),                # sys (valor ML calibrado)
+                    data.get('dia_ml', 0),                # dia (valor ML calibrado)
+                    data.get('estado', 'Sin datos'),      # nivel (clasificación médica)
+                    data.get('hr_ml', 0),                 # hr_ml (frecuencia cardíaca ML)
+                    data.get('spo2_ml', 0),               # spo2_ml (saturación ML)
+                    datetime.now()                        # timestamp_medicion
                 )
                 
                 cursor.execute(query, values)
                 cursor.close()
                 
-                self.logger.debug(f"Medición guardada: Paciente {data.get('id_paciente')}")
+                self.logger.debug(f"Medición guardada: Paciente {data.get('id_paciente')}, SYS: {data.get('sys_ml')}, DIA: {data.get('dia_ml')}")
                 
         except mysql.connector.Error as e:
             self.logger.error(f"Error guardando medición: {e}")
             raise
     
     def get_latest_measurements(self, limit=20, patient_id=None):
-        """Obtener últimas mediciones"""
+        """Obtener últimas mediciones - ACTUALIZADO para tu estructura"""
         if not self.is_connected():
             return []
         
@@ -213,6 +216,7 @@ class DatabaseManager:
             with self._get_connection() as connection:
                 cursor = connection.cursor(dictionary=True)
                 
+                # Query actualizada para tu estructura
                 if patient_id:
                     query = """
                     SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml, timestamp_medicion
@@ -234,11 +238,15 @@ class DatabaseManager:
                 records = cursor.fetchall()
                 cursor.close()
                 
-                # Convertir a string para JSON
+                # Convertir a string para JSON y manejar tipos
                 for record in records:
                     for key, value in record.items():
                         if value is not None:
-                            record[key] = str(value)
+                            if key in ['sys', 'dia', 'hr_ml', 'spo2_ml']:
+                                # Mantener números como float/int
+                                record[key] = float(value) if '.' in str(value) else int(value)
+                            else:
+                                record[key] = str(value)
                 
                 self.logger.debug(f"Obtenidas {len(records)} mediciones")
                 return records
@@ -314,7 +322,26 @@ class DatabaseManager:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
                 
-                query = """
+                # Crear tabla de entrenamiento si no existe
+                create_table_query = """
+                CREATE TABLE IF NOT EXISTS datos_entrenamiento (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    hr_promedio_sensor DECIMAL(8,2),
+                    spo2_promedio_sensor DECIMAL(5,2),
+                    ir_mean_filtrado DECIMAL(10,2),
+                    red_mean_filtrado DECIMAL(10,2),
+                    ir_std_filtrado DECIMAL(10,2),
+                    red_std_filtrado DECIMAL(10,2),
+                    sys_ref DECIMAL(5,2),
+                    dia_ref DECIMAL(5,2),
+                    hr_ref DECIMAL(5,2),
+                    timestamp_captura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+                cursor.execute(create_table_query)
+                
+                # Insertar datos
+                insert_query = """
                 INSERT INTO datos_entrenamiento 
                 (hr_promedio_sensor, spo2_promedio_sensor, ir_mean_filtrado, red_mean_filtrado,
                  ir_std_filtrado, red_std_filtrado, sys_ref, dia_ref, hr_ref, timestamp_captura)
@@ -334,7 +361,7 @@ class DatabaseManager:
                     data.get('timestamp_captura')
                 )
                 
-                cursor.execute(query, values)
+                cursor.execute(insert_query, values)
                 cursor.close()
                 
                 self.logger.debug("Datos entrenamiento guardados")
@@ -471,7 +498,7 @@ class DatabaseManager:
             return None
     
     def create_tables_if_not_exist(self):
-        """Crear tablas necesarias si no existen"""
+        """Crear tablas necesarias si no existen - ACTUALIZADO"""
         if not self.is_connected():
             return False
         
@@ -479,19 +506,20 @@ class DatabaseManager:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
                 
-                # Tabla mediciones
+                # Tabla mediciones - ESTRUCTURA ACTUALIZADA para coincidir con tu tabla
                 mediciones_table = """
                 CREATE TABLE IF NOT EXISTS mediciones (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     id_paciente INT NOT NULL,
-                    sys DECIMAL(5,2),
-                    dia DECIMAL(5,2),
-                    nivel VARCHAR(50),
-                    hr_ml DECIMAL(5,2),
-                    spo2_ml DECIMAL(5,2),
+                    sys DECIMAL(5,2) NOT NULL,
+                    dia DECIMAL(5,2) NOT NULL,
+                    nivel VARCHAR(50) NOT NULL,
+                    hr_ml DECIMAL(5,2) NOT NULL,
+                    spo2_ml DECIMAL(5,2) NOT NULL,
                     timestamp_medicion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_paciente (id_paciente),
-                    INDEX idx_timestamp (timestamp_medicion)
+                    INDEX idx_timestamp (timestamp_medicion),
+                    INDEX idx_nivel (nivel)
                 )
                 """
                 
@@ -523,6 +551,40 @@ class DatabaseManager:
             self.logger.error(f"Error creando tablas: {e}")
             return False
     
+    def test_insert_sample_data(self):
+        """Insertar datos de prueba para verificar funcionamiento"""
+        if not self.is_connected():
+            return False
+        
+        try:
+            sample_data = {
+                'id_paciente': 999,
+                'sys_ml': 120.5,
+                'dia_ml': 80.2,
+                'hr_ml': 75.0,
+                'spo2_ml': 98.0,
+                'estado': 'Normal'
+            }
+            
+            self.save_measurement_async(sample_data)
+            self.logger.info("Datos de prueba insertados")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error insertando datos de prueba: {e}")
+            return False
+    
+    def get_connection_info(self):
+        """Obtener información de conexión (sin contraseña)"""
+        return {
+            'host': self.db_config.get('host', 'No configurado'),
+            'database': self.db_config.get('database', 'No configurado'),
+            'user': self.db_config.get('user', 'No configurado'),
+            'port': self.db_config.get('port', 'No configurado'),
+            'connected': self.is_connected(),
+            'pool_size': self.pool_size
+        }
+    
     def close_connections(self):
         """Cerrar todas las conexiones de forma segura"""
         self.logger.info("Cerrando conexiones BD...")
@@ -535,7 +597,10 @@ class DatabaseManager:
         # Esperar a que se vacíe la cola
         if not self.operation_queue.empty():
             self.logger.info("Esperando operaciones pendientes...")
-            self.operation_queue.join()
+            try:
+                self.operation_queue.join()
+            except:
+                pass
         
         # Cerrar pool
         if self.connection_pool:
