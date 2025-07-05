@@ -42,7 +42,7 @@ class AlertSystem:
         # Lock para thread safety
         self.alert_lock = threading.Lock()
         
-        # Configuración de niveles de alerta
+        # Configuración de niveles de alerta - ACTUALIZADA CON TABLA MÉDICA
         self.alert_levels = {
             "HT Crisis": {
                 "priority": "critical",
@@ -272,6 +272,8 @@ class AlertSystem:
                 self.logger.error(f"ALERTA ALTA: {message}")
             elif priority == "medium":
                 self.logger.warning(f"ALERTA MEDIA: {message}")
+            elif priority == "low":
+                self.logger.info(f"ALERTA BAJA: {message}")
             else:
                 self.logger.info(f"ALERTA: {message}")
             
@@ -315,7 +317,8 @@ class AlertSystem:
             "alerts_blocked": self.alerts_blocked,
             "queue_size": self.alert_queue.qsize(),
             "last_alert": datetime.fromtimestamp(self.last_alert_time).isoformat() if self.last_alert_time else None,
-            "active_histories": len(self.alert_history)
+            "active_histories": len(self.alert_history),
+            "alert_levels_configured": list(self.alert_levels.keys())
         }
     
     def get_alert_history(self, hours=24):
@@ -471,7 +474,8 @@ class AlertSystem:
                 'queue_size': self.alert_queue.qsize(),
                 'active_rate_limits': len(self.alert_history),
                 'hourly_distribution': dict(hourly_counts),
-                'uptime_hours': (current_time - getattr(self, 'start_time', current_time)) / 3600
+                'uptime_hours': (current_time - getattr(self, 'start_time', current_time)) / 3600,
+                'configured_levels': list(self.alert_levels.keys())
             }
     
     def validate_whatsapp_config(self):
@@ -490,6 +494,26 @@ class AlertSystem:
                 
         except Exception as e:
             return {"success": False, "error": f"Error validando WhatsApp: {str(e)}"}
+    
+    def get_alert_levels_info(self):
+        """Obtener información detallada de todos los niveles de alerta"""
+        return {
+            "levels_count": len(self.alert_levels),
+            "levels_detail": {
+                level: {
+                    "priority": config["priority"],
+                    "channels": config["channels"],
+                    "template_preview": config["template"][:100] + "..." if len(config["template"]) > 100 else config["template"]
+                }
+                for level, config in self.alert_levels.items()
+            },
+            "priorities_summary": {
+                "critical": [level for level, config in self.alert_levels.items() if config["priority"] == "critical"],
+                "high": [level for level, config in self.alert_levels.items() if config["priority"] == "high"],
+                "medium": [level for level, config in self.alert_levels.items() if config["priority"] == "medium"],
+                "low": [level for level, config in self.alert_levels.items() if config["priority"] == "low"]
+            }
+        }
     
     def shutdown(self):
         """Apagar sistema de alertas de forma segura"""
