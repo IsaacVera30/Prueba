@@ -1,5 +1,6 @@
 # modules/api_nodo_datos.py
 # API especializada para recibir y procesar datos del ESP32
+# ACTUALIZADO: Sistema de 100 muestras para predicciones ML precisas
 
 from flask import Blueprint, request, jsonify
 import time
@@ -284,26 +285,36 @@ class SampleBuffer:
 # Crear instancia global del buffer de muestras
 sample_buffer = SampleBuffer()
 
-    def classify_pressure_level(sys_pressure, dia_pressure):
+def classify_pressure_level(sys_pressure, dia_pressure):
     """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
     if sys_pressure == 0 or dia_pressure == 0:
         return "Sin datos"
-    sys_val, dia_val = float(sys_pressure), float(dia_pressure)
+    
+    try:
+        sys_val, dia_val = float(sys_pressure), float(dia_pressure)
+    except (ValueError, TypeError):
+        return "Error"
+    
     # Crisis de Hipertensión (SYS > 180 O DIA > 120)
     if sys_val > 180 or dia_val > 120:
         return "HT Crisis"
+    
     # Hipertensión Etapa 2 (SYS ≥ 140 O DIA ≥ 90)
     if sys_val >= 140 or dia_val >= 90:
         return "HT2"
+    
     # Hipertensión Etapa 1 (SYS 130-139 O DIA 80-89)
     if (130 <= sys_val <= 139) or (80 <= dia_val <= 89):
         return "HT1"
+    
     # Elevada (SYS 120-129 Y DIA < 80)
     if 120 <= sys_val <= 129 and dia_val < 80:
         return "Elevada"
+    
     # Normal (SYS < 120 Y DIA < 80)
     if sys_val < 120 and dia_val < 80:
         return "Normal"
+    
     # Caso edge: valores que no encajan perfectamente
     return "Revisar"
 
