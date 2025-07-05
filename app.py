@@ -406,22 +406,30 @@ class MedicalMonitorApp:
         thread.start()
     
     def _classify_pressure_level(self, sys_pressure, dia_pressure):
-        """Clasificar nivel de presión arterial"""
-        if sys_pressure is None or dia_pressure is None:
-            return "N/A"
-        
+    """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
+    if sys_pressure is None or dia_pressure is None:
+        return "N/A"
+    try:
         sys_val, dia_val = float(sys_pressure), float(dia_pressure)
-        
-        if sys_val > 180 or dia_val > 120:
-            return "HT Crisis"
-        elif sys_val >= 140 or dia_val >= 90:
-            return "HT2"
-        elif sys_val >= 130 or dia_val >= 80:
-            return "HT1"
-        elif sys_val >= 120 and dia_val < 80:
-            return "Elevada"
-        else:
-            return "Normal"
+    except (ValueError, TypeError):
+        return "Error"
+    # Crisis de Hipertensión (SYS > 180 O DIA > 120)
+    if sys_val > 180 or dia_val > 120:
+        return "HT Crisis"
+    # Hipertensión Etapa 2 (SYS ≥ 140 O DIA ≥ 90)
+    if sys_val >= 140 or dia_val >= 90:
+        return "HT2"
+    # Hipertensión Etapa 1 (SYS 130-139 O DIA 80-89)
+    if (130 <= sys_val <= 139) or (80 <= dia_val <= 89):
+        return "HT1"
+    # Elevada (SYS 120-129 Y DIA < 80)
+    if 120 <= sys_val <= 129 and dia_val < 80:
+        return "Elevada"
+    # Normal (SYS < 120 Y DIA < 80)
+    if sys_val < 120 and dia_val < 80:
+        return "Normal"
+    # Caso edge: valores que no encajan perfectamente
+    return "Revisar"
     
     def run(self, host='0.0.0.0', port=None, debug=False):
         """Ejecutar la aplicación"""
