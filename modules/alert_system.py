@@ -52,12 +52,17 @@ class AlertSystem:
             "HT2": {
                 "priority": "high", 
                 "channels": ["whatsapp", "log"],
-                "template": "Hipertension Grado 2\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nConsultar medico pronto."
+                "template": "Hipertension Etapa 2\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nConsultar medico pronto."
             },
             "HT1": {
                 "priority": "medium",
                 "channels": ["log"],
-                "template": "Hipertension Grado 1\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nMonitorear de cerca."
+                "template": "Hipertension Etapa 1\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nMonitorear de cerca."
+            },
+            "Elevada": {
+                "priority": "low",
+                "channels": ["log"],
+                "template": "Presion Elevada\nPaciente: {patient_id}\nSYS: {sys} mmHg\nDIA: {dia} mmHg\nTiempo: {timestamp}\nCambios de estilo de vida recomendados."
             }
         }
         
