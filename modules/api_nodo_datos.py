@@ -286,22 +286,27 @@ class SampleBuffer:
 sample_buffer = SampleBuffer()
 
 def classify_pressure_level(sys_pressure, dia_pressure):
-    """Clasificar nivel de presión arterial según guías médicas"""
+    """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
     if sys_pressure == 0 or dia_pressure == 0:
         return "Sin datos"
-    
     sys_val, dia_val = float(sys_pressure), float(dia_pressure)
-    
+    # Crisis de Hipertensión (SYS > 180 O DIA > 120)
     if sys_val > 180 or dia_val > 120:
         return "HT Crisis"
-    elif sys_val >= 140 or dia_val >= 90:
+    # Hipertensión Etapa 2 (SYS ≥ 140 O DIA ≥ 90)
+    if sys_val >= 140 or dia_val >= 90:
         return "HT2"
-    elif sys_val >= 130 or dia_val >= 80:
+    # Hipertensión Etapa 1 (SYS 130-139 O DIA 80-89)
+    if (130 <= sys_val <= 139) or (80 <= dia_val <= 89):
         return "HT1"
-    elif sys_val >= 120 and dia_val < 80:
+    # Elevada (SYS 120-129 Y DIA < 80)
+    if 120 <= sys_val <= 129 and dia_val < 80:
         return "Elevada"
-    else:
+    # Normal (SYS < 120 Y DIA < 80)
+    if sys_val < 120 and dia_val < 80:
         return "Normal"
+    # Caso edge: valores que no encajan perfectamente
+    return "Revisar"
 
 @api_nodo_bp.route('/raw_data', methods=['POST'])
 def receive_raw_data():
