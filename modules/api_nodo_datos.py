@@ -1,6 +1,5 @@
 # modules/api_nodo_datos.py
 # API especializada para recibir y procesar datos del ESP32
-# ACTUALIZADO: Sistema de 100 muestras para predicciones ML precisas
 
 from flask import Blueprint, request, jsonify
 import time
