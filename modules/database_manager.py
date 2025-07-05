@@ -25,8 +25,10 @@ class DatabaseManager:
             'database': os.environ.get("MYSQLDATABASE"),
             'port': int(os.environ.get("MYSQLPORT", 22614)),
             'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci',
-            'autocommit': True
+            'ssl_disabled': True,
+            'connect_timeout': 30,
+            'raise_on_warnings': False
+            
         }
         
         # Pool de conexiones
@@ -65,7 +67,7 @@ class DatabaseManager:
                 'pool_name': 'medical_monitor_pool',
                 'pool_size': self.pool_size,
                 'pool_reset_session': True,
-                'connect_timeout': 10,
+                'connect_timeout': 30,
                 'autocommit': True
             }
             
