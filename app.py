@@ -167,6 +167,42 @@ class MedicalMonitorApp:
                 logger.error(f"Error obteniendo mediciones: {e}")
                 return jsonify([])
         
+        @self.app.route("/api/mediciones_recientes")
+        def get_mediciones_recientes():
+            """Obtener últimas mediciones para el panel"""
+            try:
+                limit = request.args.get('limit', 20, type=int)
+                records = self.db_manager.get_latest_measurements(limit=limit)
+                
+                # Formatear para el panel usando los nombres exactos de tu tabla
+                mediciones = []
+                for record in records:
+                    mediciones.append({
+                        'id': record.get('id'),
+                        'patient_id': record.get('id_paciente'),  # id_paciente
+                        'sys': float(record.get('sys', 0)),       # sys
+                        'dia': float(record.get('dia', 0)),       # dia
+                        'hr': float(record.get('hr_ml', 0)),      # hr_ml
+                        'spo2': float(record.get('spo2_ml', 0)),  # spo2_ml
+                        'nivel': record.get('nivel', '---'),      # nivel
+                        'timestamp': str(record.get('timestamp_medicion', '')),
+                        'fecha_formateada': str(record.get('timestamp_medicion', ''))[:19]
+                    })
+                
+                return jsonify({
+                    'success': True,
+                    'mediciones': mediciones,
+                    'count': len(mediciones)
+                })
+                
+            except Exception as e:
+                logger.error(f"Error obteniendo mediciones recientes: {e}")
+                return jsonify({
+                    'success': False, 
+                    'error': str(e),
+                    'mediciones': []
+                })
+        
         @self.app.route("/api/test_alert", methods=['POST'])
         def test_alert():
             """Endpoint de prueba para alertas"""
