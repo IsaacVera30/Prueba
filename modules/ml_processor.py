@@ -43,7 +43,7 @@ class MLProcessor:
             'sys_global': 1.065,  # Factor basado en comparación 109/130
             'dia_global': 0.884,   # Corrección mínima para diastólica
             'sys_by_range': {
-                (0, 120): 1.012,      # Presión normal: corrección menor
+                (0, 120): 1.065,      # Presión normal: corrección menor
                 (120, 140): 1.065,    # Presión elevada: corrección media
                 (140, 180): 1.087,    # Hipertensión: corrección mayor
                 (180, 250): 1.119     # Crisis: corrección máxima
