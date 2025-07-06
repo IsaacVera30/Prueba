@@ -83,7 +83,7 @@ class DataCollector:
         """Probar conexión con Google Drive"""
         try:
             # Verificar que la carpeta existe
-            query = f"id='{self.folder_id}' and trashed=false"
+            query = f"='{self.folder_id}' in parents and trashed=false"
             response = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             files = response.get('files', [])
             
