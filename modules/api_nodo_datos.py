@@ -303,6 +303,9 @@ def receive_raw_data():
                             logger.error("Respuesta ML inválida")
                             sys_pred, dia_pred, hr_final = 0, 0, hr_calc
                         
+# En modules/api_nodo_datos.py
+# Cambiar la sección donde guarda en BD (línea aproximada 280-295)
+
                         # Validar predicciones
                         if sys_pred > 0 and dia_pred > 0:
                             # Actualizar respuesta con resultados ML
@@ -317,20 +320,27 @@ def receive_raw_data():
                             
                             logger.info(f"Predicción ML exitosa - SYS:{sys_pred} DIA:{dia_pred}")
                             
-                            # Guardar medición en base de datos
-                            if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
-                                measurement_data = {
-                                    'id_paciente': patient_id,
-                                    'sys': sys_pred,                     
-                                    'dia': dia_pred,                     
-                                    'hr_ml': hr_final,
-                                    'spo2_ml': spo2_calc,
-                                    'nivel': response["nivel"]           
-                                }
-                                api_nodo_bp.db_manager.save_measurement_async(measurement_data)
-                                logger.info(f"Medición guardada en BD")
+                            # GUARDAR EN BASE DE DATOS - FORZAR SIEMPRE
+                            try:
+                                if hasattr(api_nodo_bp, 'db_manager'):
+                                    measurement_data = {
+                                        'id_paciente': patient_id,
+                                        'sys': float(sys_pred),                     
+                                        'dia': float(dia_pred),                     
+                                        'hr_ml': float(hr_final),
+                                        'spo2_ml': float(spo2_calc),
+                                        'nivel': str(response["nivel"])           
+                                    }
+                                    
+                                    # Usar save directamente en lugar de async
+                                    api_nodo_bp.db_manager._save_measurement_sync(measurement_data)
+                                    logger.info(f"Medición FORZADA guardada en BD: SYS={sys_pred}, DIA={dia_pred}")
+                                else:
+                                    logger.error("db_manager no disponible")
+                            except Exception as e:
+                                logger.error(f"Error FORZANDO guardado BD: {e}")
                             
-                            # Verificar alertas
+                            # Verificar alertas (resto del código igual)
                             if hasattr(api_nodo_bp, 'alert_system'):
                                 alert_data = {
                                     'patient_id': patient_id,
