@@ -1,5 +1,5 @@
 # modules/database_manager.py
-# Gestor especializado para operaciones de base de datos
+# Gestor especializado para operaciones de base de datos - CORREGIDO SSL
 
 import mysql.connector
 from mysql.connector import pooling
@@ -17,7 +17,7 @@ class DatabaseManager:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # Configuración de BD
+        # Configuración de BD - CORREGIDA PARA SSL
         self.db_config = {
             'host': os.environ.get("MYSQLHOST"),
             'user': os.environ.get("MYSQLUSER"),
@@ -25,10 +25,14 @@ class DatabaseManager:
             'database': os.environ.get("MYSQLDATABASE"),
             'port': int(os.environ.get("MYSQLPORT", 22614)),
             'charset': 'utf8mb4',
-            'ssl_disabled': True,
+            'ssl_disabled': False,  # CAMBIO: Habilitar SSL
+            'ssl_verify_cert': False,  # NUEVO: No verificar certificado
+            'ssl_verify_identity': False,  # NUEVO: No verificar identidad
+            'auth_plugin': 'mysql_native_password',  # NUEVO: Plugin de autenticación
             'connect_timeout': 30,
-            'raise_on_warnings': False
-            
+            'raise_on_warnings': False,
+            'autocommit': True,
+            'use_unicode': True
         }
         
         # Pool de conexiones
@@ -53,7 +57,7 @@ class DatabaseManager:
         self._start_worker_thread()
     
     def _initialize_pool(self):
-        """Inicializar pool de conexiones"""
+        """Inicializar pool de conexiones con manejo SSL mejorado"""
         try:
             # Verificar configuración
             if not all([self.db_config['host'], self.db_config['user'], 
@@ -61,25 +65,56 @@ class DatabaseManager:
                 self.logger.warning("Configuración de BD incompleta, funcionando sin BD")
                 return
             
-            # Crear pool de conexiones
-            pool_config = {
-                **self.db_config,
-                'pool_name': 'medical_monitor_pool',
-                'pool_size': self.pool_size,
-                'pool_reset_session': True,
-                'connect_timeout': 30,
-                'autocommit': True
-            }
+            # INTENTAR MÚLTIPLES CONFIGURACIONES SSL
+            ssl_configs = [
+                # Configuración 1: SSL habilitado sin verificación
+                {
+                    **self.db_config,
+                    'ssl_disabled': False,
+                    'ssl_verify_cert': False,
+                    'ssl_verify_identity': False,
+                    'auth_plugin': 'mysql_native_password'
+                },
+                # Configuración 2: SSL completamente deshabilitado
+                {
+                    **self.db_config,
+                    'ssl_disabled': True,
+                    'auth_plugin': 'mysql_native_password'
+                },
+                # Configuración 3: Sin especificar SSL
+                {
+                    k: v for k, v in self.db_config.items() 
+                    if not k.startswith('ssl') and k != 'auth_plugin'
+                }
+            ]
             
-            self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
-            self.logger.info(f"Pool de conexiones BD inicializado ({self.pool_size} conexiones)")
+            for i, config in enumerate(ssl_configs):
+                try:
+                    self.logger.info(f"Intentando conexión BD - Configuración {i+1}")
+                    
+                    # Crear pool de conexiones
+                    pool_config = {
+                        **config,
+                        'pool_name': 'medical_monitor_pool',
+                        'pool_size': self.pool_size,
+                        'pool_reset_session': True
+                    }
+                    
+                    self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
+                    self.logger.info(f"Pool de conexiones BD inicializado ({self.pool_size} conexiones) - Config {i+1}")
+                    
+                    # Verificar conexión
+                    self._test_connection()
+                    return  # Éxito, salir del loop
+                    
+                except mysql.connector.Error as e:
+                    self.logger.warning(f"Configuración {i+1} falló: {e}")
+                    self.connection_pool = None
+                    continue
             
-            # Verificar conexión
-            self._test_connection()
+            # Si llegamos aquí, todas las configuraciones fallaron
+            self.logger.error("Todas las configuraciones de BD fallaron")
             
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error inicializando pool BD: {e}")
-            self.connection_pool = None
         except Exception as e:
             self.logger.error(f"Error inesperado inicializando BD: {e}")
             self.connection_pool = None
@@ -96,6 +131,7 @@ class DatabaseManager:
                 cursor.close()
         except Exception as e:
             self.logger.error(f"Error probando conexión BD: {e}")
+            raise
     
     @contextmanager
     def _get_connection(self):
@@ -132,7 +168,7 @@ class DatabaseManager:
                 
                 # Marcar tarea como completada
                 self.operation_queue.task_done()
-                self.logger.info(f"Operación BD completada: {operation.get('type')}")
+                
             except queue.Empty:
                 continue
             except Exception as e:
@@ -539,7 +575,8 @@ class DatabaseManager:
             'user': self.db_config.get('user', 'No configurado'),
             'port': self.db_config.get('port', 'No configurado'),
             'connected': self.is_connected(),
-            'pool_size': self.pool_size
+            'pool_size': self.pool_size,
+            'ssl_disabled': self.db_config.get('ssl_disabled', True)
         }
     
     def close_connections(self):
