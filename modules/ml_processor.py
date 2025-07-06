@@ -40,13 +40,13 @@ class MLProcessor:
         # CALIBRACIÓN CORREGIDA: Factores que realmente funcionen
         self.calibration_enabled = True
         self.calibration_factors = {
-            'sys_global': 0.8500,  # Reduce SYS de ~135 a ~115 
-            'dia_global': 1.0800,  # Aumenta DIA de ~74 a ~80
+            'sys_global': 0.7500,  # Reduce SYS de ~135 a ~115 
+            'dia_global': 1.1000,  # Aumenta DIA de ~74 a ~80
             'sys_by_range': {
-                (0, 120): 0.8500,      # Presión normal
-                (120, 140): 0.8500,    # Presión elevada
-                (140, 180): 0.8500,    # Hipertensión
-                (180, 250): 0.8500     # Crisis
+                (0, 120): 0.7500,      # Presión normal
+                (120, 140): 0.7500,    # Presión elevada
+                (140, 180): 0.7500,    # Hipertensión
+                (180, 250): 0.7500     # Crisis
             }
         }
         
