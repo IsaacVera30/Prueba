@@ -1,5 +1,5 @@
 # modules/data_collector.py
-# Recolector de datos especializado para entrenamiento ML - SISTEMA CORREGIDO
+# Recolector de datos especializado para entrenamiento ML - GOOGLE DRIVE CORREGIDO
 
 import os
 import csv
@@ -15,15 +15,15 @@ from googleapiclient.errors import HttpError
 import threading
 
 class DataCollector:
-    """Recolector de datos especializado para entrenamiento ML con manejo robusto"""
+    """Recolector de datos especializado para entrenamiento ML con Google Drive corregido"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # Configuracion Google Drive
-        self.folder_id = "1O3Zmpti5cWXD0X25XpkNgZfuMiRVXw4"
+        # Configuracion Google Drive - CORREGIDA PARA USAR VARIABLES DE ENTORNO
+        self.folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "1O3Zmpti5cWXD0X25XpkNgZfuMiRVXw4")
         self.csv_filename = "entrenamiento_ml.csv"
-        self.credentials_path = "/etc/secrets/service_account.json"
+        self.credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/etc/secrets/service_account.json")
         
         # Estados
         self.training_active = False
@@ -44,11 +44,17 @@ class DataCollector:
         # Lock para thread safety
         self.save_lock = threading.Lock()
         
+        # Log de configuración
+        self.logger.info(f"Configuración Google Drive:")
+        self.logger.info(f"  - Folder ID: {self.folder_id}")
+        self.logger.info(f"  - Credentials path: {self.credentials_path}")
+        self.logger.info(f"  - CSV filename: {self.csv_filename}")
+        
         # Inicializar Drive
         self._init_drive()
     
     def _init_drive(self):
-        """Inicializar conexión con Google Drive con manejo robusto de errores"""
+        """Inicializar conexión con Google Drive - CORREGIDO"""
         try:
             if not os.path.exists(self.credentials_path):
                 self.logger.error(f"Archivo credentials no encontrado en: {self.credentials_path}")
@@ -65,7 +71,7 @@ class DataCollector:
             # Crear servicio Drive
             self.drive_service = build('drive', 'v3', credentials=credentials)
             
-            # Probar conexión
+            # Probar conexión con query corregido
             if self._test_drive_connection():
                 self.drive_connected = True
                 self.logger.info("Google Drive inicializado correctamente")
@@ -80,18 +86,46 @@ class DataCollector:
             return False
     
     def _test_drive_connection(self):
-        """Probar conexión con Google Drive"""
+        """Probar conexión con Google Drive - QUERY CORREGIDO"""
         try:
-            # Verificar que la carpeta existe
-            query = f"='{self.folder_id}' in parents and trashed=false"
-            response = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
-            files = response.get('files', [])
+            # CORREGIDO: Verificar primero que podemos listar archivos básicos
+            self.logger.info("Probando conexión básica con Google Drive...")
             
-            if files:
-                self.logger.info(f"Carpeta Drive encontrada: {files[0].get('name', 'Sin nombre')}")
-                return True
-            else:
-                self.logger.error(f"Carpeta Drive no encontrada con ID: {self.folder_id}")
+            # Test básico: listar algunos archivos
+            response = self.drive_service.files().list(
+                pageSize=1,
+                fields='files(id, name)'
+            ).execute()
+            
+            self.logger.info("Conexión básica con Google Drive exitosa")
+            
+            # CORREGIDO: Ahora verificar la carpeta específica usando el ID correcto
+            self.logger.info(f"Verificando acceso a carpeta: {self.folder_id}")
+            
+            try:
+                # Obtener información de la carpeta directamente
+                folder_info = self.drive_service.files().get(
+                    fileId=self.folder_id,
+                    fields='id, name, mimeType'
+                ).execute()
+                
+                self.logger.info(f"Carpeta encontrada: {folder_info.get('name', 'Sin nombre')} (ID: {folder_info.get('id')})")
+                
+                # Verificar que es una carpeta
+                if folder_info.get('mimeType') == 'application/vnd.google-apps.folder':
+                    self.logger.info("Confirmado: Es una carpeta de Google Drive")
+                    return True
+                else:
+                    self.logger.error(f"El ID no corresponde a una carpeta: {folder_info.get('mimeType')}")
+                    return False
+                    
+            except HttpError as e:
+                if e.resp.status == 404:
+                    self.logger.error(f"Carpeta no encontrada con ID: {self.folder_id}")
+                elif e.resp.status == 403:
+                    self.logger.error(f"Sin permisos para acceder a la carpeta: {self.folder_id}")
+                else:
+                    self.logger.error(f"Error accediendo a carpeta: {e}")
                 return False
                 
         except Exception as e:
@@ -106,111 +140,9 @@ class DataCollector:
             self.logger.info("Reintentando conexión con Google Drive...")
             self._init_drive()
     
-    def start_training_session(self):
-        """Iniciar sesión de entrenamiento - LEGACY COMPATIBILITY"""
-        if self.training_active:
-            return {"success": False, "error": "Ya activo"}
-        
-        self.training_active = True
-        self.phase = "stabilizing"
-        self.sample_buffer = []
-        
-        self.logger.info("Entrenamiento iniciado (legacy)")
-        return {
-            "success": True,
-            "phase": "stabilizing",
-            "message": "Entrenamiento iniciado"
-        }
-    
-    def add_sample(self, sample_data):
-        """Añadir muestra - LEGACY COMPATIBILITY"""
-        if not self.training_active:
-            return {"success": False, "error": "No activo"}
-        
-        try:
-            sample_data.update({
-                'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                'phase': self.phase
-            })
-            
-            self.sample_buffer.append(sample_data)
-            
-            return {
-                "success": True,
-                "phase": self.phase,
-                "total_samples": len(self.sample_buffer),
-                "next_instruction": "Mantener dedo estable"
-            }
-        except Exception as e:
-            self.logger.error(f"Error añadiendo muestra: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def stop_training_session(self):
-        """Detener sesión de entrenamiento - LEGACY COMPATIBILITY"""
-        if not self.training_active:
-            return {"success": False, "error": "No activo"}
-        
-        self.training_active = False
-        self.phase = "ready_to_save"
-        
-        return {
-            "success": True,
-            "message": "Sesion detenida",
-            "session_summary": {
-                "total_samples": len(self.sample_buffer)
-            },
-            "ready_to_save": True
-        }
-    
-    def save_training_data(self, ref_data):
-        """Guardar datos de entrenamiento con referencias - LEGACY COMPATIBILITY"""
-        try:
-            if self.phase != "ready_to_save":
-                return {"success": False, "error": "No listo para guardar"}
-            
-            if not self.sample_buffer:
-                return {"success": False, "error": "No hay muestras"}
-            
-            # Procesar muestras
-            processed_data = self._process_samples()
-            
-            # Crear registro final
-            final_record = {
-                'hr_promedio_sensor': processed_data['hr_promedio'],
-                'spo2_promedio_sensor': processed_data['spo2_promedio'],
-                'ir_mean_filtrado': processed_data['ir_mean'],
-                'red_mean_filtrado': processed_data['red_mean'],
-                'ir_std_filtrado': processed_data['ir_std'],
-                'red_std_filtrado': processed_data['red_std'],
-                'sys_ref': float(ref_data['sys_ref']),
-                'dia_ref': float(ref_data['dia_ref']),
-                'hr_ref': float(ref_data['hr_ref']),
-                'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-            
-            # Guardar en Drive
-            result = self.save_training_sample(final_record)
-            
-            if result.get('success'):
-                # Limpiar después de guardar exitosamente
-                self.phase = "idle"
-                self.sample_buffer = []
-                
-                return {
-                    "success": True,
-                    "message": "Guardado exitoso"
-                }
-            else:
-                return result
-            
-        except Exception as e:
-            self.logger.error(f"Error guardando datos: {e}")
-            return {"success": False, "error": str(e)}
-    
     def save_training_sample(self, sample_data):
         """
-        Método principal para guardar muestras de entrenamiento
-        Compatible con el nuevo sistema de buffers separados
+        Método principal para guardar muestras de entrenamiento - CORREGIDO
         """
         with self.save_lock:
             try:
@@ -323,12 +255,20 @@ class DataCollector:
         return {"success": False, "error": f"Falló después de {max_retries} intentos"}
     
     def _save_to_drive(self, row_data):
-        """Guardar datos en Google Drive"""
+        """Guardar datos en Google Drive - CORREGIDO"""
         try:
-            # Buscar archivo existente
+            # CORREGIDO: Buscar archivo existente con query correcto
             query = f"name='{self.csv_filename}' and '{self.folder_id}' in parents and trashed=false"
-            response = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
+            self.logger.debug(f"Buscando archivo con query: {query}")
+            
+            response = self.drive_service.files().list(
+                q=query,
+                fields='files(id, name)',
+                pageSize=10
+            ).execute()
+            
             files = response.get('files', [])
+            self.logger.info(f"Archivos encontrados: {len(files)}")
             
             # Preparar contenido CSV
             string_io = io.StringIO()
@@ -343,6 +283,8 @@ class DataCollector:
             if files:
                 # Archivo existe - descargar y añadir nueva fila
                 file_id = files[0]['id']
+                self.logger.info(f"Actualizando archivo existente: {files[0]['name']} (ID: {file_id})")
+                
                 try:
                     # Descargar contenido existente
                     existing_file = self.drive_service.files().get_media(fileId=file_id).execute()
@@ -378,10 +320,10 @@ class DataCollector:
                         
             else:
                 # Archivo nuevo - crear con header
+                self.logger.info("Creando nuevo archivo CSV")
                 writer = csv.DictWriter(string_io, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerow(row_data)
-                self.logger.info("Creando nuevo archivo CSV")
             
             # Subir archivo a Drive
             csv_content = string_io.getvalue()
@@ -402,9 +344,10 @@ class DataCollector:
                 fields="id, name, size"
             ).execute()
             
-            self.logger.info(f"Archivo guardado: {uploaded_file.get('name')} "
-                           f"(ID: {uploaded_file.get('id')}, "
-                           f"Tamaño: {uploaded_file.get('size', 0)} bytes)")
+            self.logger.info(f"Archivo guardado exitosamente:")
+            self.logger.info(f"  - Nombre: {uploaded_file.get('name')}")
+            self.logger.info(f"  - ID: {uploaded_file.get('id')}")
+            self.logger.info(f"  - Tamaño: {uploaded_file.get('size', 0)} bytes")
             
             return {
                 "success": True,
@@ -423,49 +366,13 @@ class DataCollector:
             self.logger.error(error_msg)
             return {"success": False, "error": error_msg}
     
-    def get_training_status(self):
-        """Obtener estado del entrenamiento - LEGACY COMPATIBILITY"""
-        return {
-            "active": self.training_active,
-            "phase": self.phase,
-            "total_samples": len(self.sample_buffer),
-            "current_instruction": self._get_instruction()
-        }
-    
-    def _process_samples(self):
-        """Procesar muestras del buffer - LEGACY COMPATIBILITY"""
-        hr_values = [float(s.get('hr_promedio', 0)) for s in self.sample_buffer if s.get('hr_promedio')]
-        spo2_values = [float(s.get('spo2_sensor', 0)) for s in self.sample_buffer if s.get('spo2_sensor')]
-        ir_values = [float(s.get('ir', 0)) for s in self.sample_buffer if s.get('ir')]
-        red_values = [float(s.get('red', 0)) for s in self.sample_buffer if s.get('red')]
-        
-        return {
-            'hr_promedio': np.mean(hr_values) if hr_values else 75,
-            'spo2_promedio': np.mean(spo2_values) if spo2_values else 98,
-            'ir_mean': np.mean(ir_values) if ir_values else 1000,
-            'red_mean': np.mean(red_values) if red_values else 800,
-            'ir_std': np.std(ir_values) if len(ir_values) > 1 else 0,
-            'red_std': np.std(red_values) if len(red_values) > 1 else 0
-        }
-    
-    def _get_instruction(self):
-        """Obtener instrucción actual - LEGACY COMPATIBILITY"""
-        instructions = {
-            "idle": "Inactivo",
-            "stabilizing": "Mantener dedo estable",
-            "measuring": "Medicion en curso",
-            "waiting": "Esperar unos segundos mas",
-            "ready_to_save": "Ingresar valores de referencia"
-        }
-        return instructions.get(self.phase, "Estado desconocido")
-    
     def get_status(self):
         """Obtener estado completo del data collector"""
         return {
             "drive_connected": self.drive_connected,
-            "training_active": self.training_active,
-            "phase": self.phase,
-            "samples_in_buffer": len(self.sample_buffer),
+            "folder_id": self.folder_id,
+            "credentials_path": self.credentials_path,
+            "csv_filename": self.csv_filename,
             "total_saved": self.total_saved,
             "save_errors": self.save_errors,
             "last_save": datetime.fromtimestamp(self.last_save_time).isoformat() if self.last_save_time else None,
@@ -481,7 +388,8 @@ class DataCollector:
             query = f"name='{self.csv_filename}' and '{self.folder_id}' in parents and trashed=false"
             response = self.drive_service.files().list(
                 q=query, 
-                fields='files(id, name, size, modifiedTime, createdTime)'
+                fields='files(id, name, size, modifiedTime, createdTime)',
+                pageSize=10
             ).execute()
             files = response.get('files', [])
             
@@ -553,8 +461,6 @@ class DataCollector:
             "success_rate": round(success_rate, 2),
             "drive_connected": self.drive_connected,
             "last_save_time": self.last_save_time,
-            "connection_retries": getattr(self, 'connection_retries', 0),
-            "avg_save_time": getattr(self, 'avg_save_time', 0),
             "folder_id": self.folder_id,
             "csv_filename": self.csv_filename
         }
@@ -586,6 +492,147 @@ class DataCollector:
             
         except Exception as e:
             self.logger.error(f"Error cerrando Data Collector: {e}")
+    
+    # =============================================
+    # MÉTODOS LEGACY PARA COMPATIBILIDAD
+    # =============================================
+    
+    def start_training_session(self):
+        """Iniciar sesión de entrenamiento - LEGACY COMPATIBILITY"""
+        if self.training_active:
+            return {"success": False, "error": "Ya activo"}
+        
+        self.training_active = True
+        self.phase = "stabilizing"
+        self.sample_buffer = []
+        
+        self.logger.info("Entrenamiento iniciado (legacy)")
+        return {
+            "success": True,
+            "phase": "stabilizing",
+            "message": "Entrenamiento iniciado"
+        }
+    
+    def add_sample(self, sample_data):
+        """Añadir muestra - LEGACY COMPATIBILITY"""
+        if not self.training_active:
+            return {"success": False, "error": "No activo"}
+        
+        try:
+            sample_data.update({
+                'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
+                'phase': self.phase
+            })
+            
+            self.sample_buffer.append(sample_data)
+            
+            return {
+                "success": True,
+                "phase": self.phase,
+                "total_samples": len(self.sample_buffer),
+                "next_instruction": "Mantener dedo estable"
+            }
+        except Exception as e:
+            self.logger.error(f"Error añadiendo muestra: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def stop_training_session(self):
+        """Detener sesión de entrenamiento - LEGACY COMPATIBILITY"""
+        if not self.training_active:
+            return {"success": False, "error": "No activo"}
+        
+        self.training_active = False
+        self.phase = "ready_to_save"
+        
+        return {
+            "success": True,
+            "message": "Sesion detenida",
+            "session_summary": {
+                "total_samples": len(self.sample_buffer)
+            },
+            "ready_to_save": True
+        }
+    
+    def save_training_data(self, ref_data):
+        """Guardar datos de entrenamiento con referencias - LEGACY COMPATIBILITY"""
+        try:
+            if self.phase != "ready_to_save":
+                return {"success": False, "error": "No listo para guardar"}
+            
+            if not self.sample_buffer:
+                return {"success": False, "error": "No hay muestras"}
+            
+            # Procesar muestras
+            processed_data = self._process_samples()
+            
+            # Crear registro final
+            final_record = {
+                'hr_promedio_sensor': processed_data['hr_promedio'],
+                'spo2_promedio_sensor': processed_data['spo2_promedio'],
+                'ir_mean_filtrado': processed_data['ir_mean'],
+                'red_mean_filtrado': processed_data['red_mean'],
+                'ir_std_filtrado': processed_data['ir_std'],
+                'red_std_filtrado': processed_data['red_std'],
+                'sys_ref': float(ref_data['sys_ref']),
+                'dia_ref': float(ref_data['dia_ref']),
+                'hr_ref': float(ref_data['hr_ref']),
+                'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Guardar en Drive
+            result = self.save_training_sample(final_record)
+            
+            if result.get('success'):
+                # Limpiar después de guardar exitosamente
+                self.phase = "idle"
+                self.sample_buffer = []
+                
+                return {
+                    "success": True,
+                    "message": "Guardado exitoso"
+                }
+            else:
+                return result
+            
+        except Exception as e:
+            self.logger.error(f"Error guardando datos: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def get_training_status(self):
+        """Obtener estado del entrenamiento - LEGACY COMPATIBILITY"""
+        return {
+            "active": self.training_active,
+            "phase": self.phase,
+            "total_samples": len(self.sample_buffer),
+            "current_instruction": self._get_instruction()
+        }
+    
+    def _process_samples(self):
+        """Procesar muestras del buffer - LEGACY COMPATIBILITY"""
+        hr_values = [float(s.get('hr_promedio', 0)) for s in self.sample_buffer if s.get('hr_promedio')]
+        spo2_values = [float(s.get('spo2_sensor', 0)) for s in self.sample_buffer if s.get('spo2_sensor')]
+        ir_values = [float(s.get('ir', 0)) for s in self.sample_buffer if s.get('ir')]
+        red_values = [float(s.get('red', 0)) for s in self.sample_buffer if s.get('red')]
+        
+        return {
+            'hr_promedio': np.mean(hr_values) if hr_values else 75,
+            'spo2_promedio': np.mean(spo2_values) if spo2_values else 98,
+            'ir_mean': np.mean(ir_values) if ir_values else 1000,
+            'red_mean': np.mean(red_values) if red_values else 800,
+            'ir_std': np.std(ir_values) if len(ir_values) > 1 else 0,
+            'red_std': np.std(red_values) if len(red_values) > 1 else 0
+        }
+    
+    def _get_instruction(self):
+        """Obtener instrucción actual - LEGACY COMPATIBILITY"""
+        instructions = {
+            "idle": "Inactivo",
+            "stabilizing": "Mantener dedo estable",
+            "measuring": "Medicion en curso",
+            "waiting": "Esperar unos segundos mas",
+            "ready_to_save": "Ingresar valores de referencia"
+        }
+        return instructions.get(self.phase, "Estado desconocido")
     
     def __del__(self):
         """Limpieza al destruir el objeto"""
