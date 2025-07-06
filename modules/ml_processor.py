@@ -1,5 +1,5 @@
 # modules/ml_processor.py
-# Procesador ML especializado CORREGIDO
+# Procesador ML especializado CORREGIDO - CÓDIGO COMPLETO
 
 import joblib
 import numpy as np
@@ -37,11 +37,11 @@ class MLProcessor:
         # Lock para thread safety
         self.prediction_lock = threading.Lock()
         
-        # Calibración corregida
+        # Calibración CORREGIDA - VALORES AJUSTADOS
         self.calibration_enabled = True
         self.calibration_factors = {
-            'sys_global': 1.10,  # Reduce SYS
-            'dia_global': 0.85,  # Aumenta DIA ligeramente
+            'sys_global': 1.10,  # CAMBIO: Reducido de 1.25 a 1.10
+            'dia_global': 0.85,  # Mantener para reducir DIA
         }
         
         # Inicializar modelos
@@ -239,7 +239,6 @@ class MLProcessor:
             if signal_ratio > 2.0:
                 # Señal IR dominante = HR posiblemente alta
                 hr_ajustado = hr_base + min(10, (signal_ratio - 2.0) * 5)
-# Continuación del método _calcular_hr_corregido
             elif signal_ratio < 1.2:
                 # Señal IR baja = HR posiblemente baja
                 hr_ajustado = hr_base - min(8, (1.2 - signal_ratio) * 8)
