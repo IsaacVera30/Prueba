@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Monitoreo de Salud</title>
+    <title>Panel de Monitoreo de Salud - Entrenamiento Corregido</title>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
@@ -52,6 +52,14 @@
             color: #6c757d; 
             cursor: not-allowed; 
         }
+        button.active {
+            background-color: #28a745;
+            color: white;
+        }
+        button.stop {
+            background-color: #dc3545;
+            color: white;
+        }
         input[type="number"] { 
             padding: 8px; 
             border-radius: 5px; 
@@ -84,6 +92,31 @@
         .form-group > * { 
             margin-right: 15px; 
         }
+        .status-active {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .status-capturing {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .status-ready {
+            color: #17a2b8;
+            font-weight: bold;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #28a745;
+            transition: width 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -102,24 +135,48 @@
         <p>HR ML: <strong id="hr">---</strong> bpm</p>
         <p>SpO2 ML: <strong id="spo2">---</strong> %</p>
         <p>Estado: <strong id="nivel">---</strong></p>
+        <p>Muestras: <strong id="muestras_count">---</strong></p>
     </div>
 
     <div class="container">
-        <h2>Entrenamiento ML</h2>
-        <p>Este modo permite capturar un segmento de datos del sensor para generar una nueva fila de entrenamiento, asociandola a una medicion de referencia de un tensiometro real.</p>
-        <button id="authTrainingBtn">1. Autorizar Modo Entrenamiento</button>
+        <h2>Entrenamiento ML CORREGIDO</h2>
+        <p><strong>Instrucciones:</strong></p>
+        <ol>
+            <li>Active el modo entrenamiento</li>
+            <li>Mantenga el dedo estable en el sensor</li>
+            <li>Espere 5 segundos (estabilizacion)</li>
+            <li>Encienda el tensiometro en el otro brazo</li>
+            <li>NO mueva ninguno de los dos brazos durante la medicion</li>
+            <li>Cuando termine el tensiometro, mantenga dedo 5 segundos mas</li>
+            <li>Detenga manualmente e ingrese valores de referencia</li>
+        </ol>
+        
+        <button id="authTrainingBtn">ACTIVAR Modo Entrenamiento</button>
+        
         <div id="training-subsection" class="training-subsection">
-            <button id="toggleCaptureBtn" disabled>2. Iniciar Captura</button>
-            <span id="capture-status" style="font-weight: bold; margin-left: 10px;"></span>
+            <div style="margin: 15px 0;">
+                <button id="startMeasurementBtn" disabled>Tensiómetro ENCENDIDO</button>
+                <button id="finishMeasurementBtn" disabled>Tensiómetro TERMINÓ</button>
+                <button id="stopTrainingBtn" disabled class="stop">DETENER Entrenamiento</button>
+            </div>
+            
+            <div style="margin: 15px 0;">
+                <span id="training-status" class="status-active">Inactivo</span>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill" style="width: 0%;"></div>
+                </div>
+                <div id="phase-info">---</div>
+            </div>
+            
             <div style="margin-top: 15px;">
-                <p><strong>Paso 3:</strong> Despues de detener la captura, ingrese los valores de referencia.</p>
+                <p><strong>Valores de Referencia del Tensiómetro:</strong></p>
                 <div class="form-group">
-                    <label>SYS Referencia: <input type="number" id="sysRef" disabled></label>
-                    <label>DIA Referencia: <input type="number" id="diaRef" disabled></label>
-                    <label>HR Referencia: <input type="number" id="hrRef" disabled></label>
+                    <label>SYS: <input type="number" id="sysRef" disabled min="70" max="250"></label>
+                    <label>DIA: <input type="number" id="diaRef" disabled min="40" max="150"></label>
+                    <label>HR: <input type="number" id="hrRef" disabled min="40" max="200"></label>
                 </div>
             </div>
-            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive</button>
+            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>GUARDAR en Google Drive</button>
         </div>
     </div>
 
@@ -158,13 +215,18 @@
                 hr: document.getElementById('hr'),
                 spo2: document.getElementById('spo2'),
                 nivel: document.getElementById('nivel'),
+                muestras_count: document.getElementById('muestras_count'),
                 
-                // Entrenamiento
+                // Entrenamiento CORREGIDO
                 authTrainingBtn: document.getElementById('authTrainingBtn'),
                 trainingSubsection: document.getElementById('training-subsection'),
-                toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
+                startMeasurementBtn: document.getElementById('startMeasurementBtn'),
+                finishMeasurementBtn: document.getElementById('finishMeasurementBtn'),
+                stopTrainingBtn: document.getElementById('stopTrainingBtn'),
                 saveSampleBtn: document.getElementById('saveSampleBtn'),
-                captureStatus: document.getElementById('capture-status'),
+                trainingStatus: document.getElementById('training-status'),
+                progressFill: document.getElementById('progress-fill'),
+                phaseInfo: document.getElementById('phase-info'),
                 sysRef: document.getElementById('sysRef'),
                 diaRef: document.getElementById('diaRef'),
                 hrRef: document.getElementById('hrRef'),
@@ -173,8 +235,14 @@
                 medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
             };
 
-            let trainingAuthorized = false;
-            let isCapturing = false;
+            // Estado del entrenamiento
+            let trainingState = {
+                active: false,
+                phase: 'idle', // idle, stabilizing, ready_for_measurement, measuring, waiting, ready_to_save
+                startTime: null,
+                totalSamples: 0
+            };
+
             let socket;
 
             // Inicializar Socket.IO
@@ -204,17 +272,14 @@
                         if (data.hr !== undefined) ui.hr.textContent = Math.round(data.hr);
                         if (data.spo2 !== undefined) ui.spo2.textContent = Math.round(data.spo2);
                         if (data.nivel !== undefined) ui.nivel.textContent = data.nivel;
+                        if (data.muestras_recolectadas !== undefined) {
+                            ui.muestras_count.textContent = data.muestras_recolectadas + "/50";
+                        }
                     });
 
                     socket.on('new_record_saved', () => {
                         console.log('Nuevo registro guardado');
                         actualizarTablaMediciones();
-                    });
-                    
-                    socket.on('capture_count_update', function(data) {
-                        if (isCapturing) {
-                            ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`;
-                        }
                     });
                     
                 } catch (error) {
@@ -224,113 +289,205 @@
 
             function updateTrainingUI() {
                 // Mostrar/ocultar subsección
-                ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
+                ui.trainingSubsection.style.display = trainingState.active ? 'block' : 'none';
                 
-                // Texto del botón principal
-                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento' : '1. Autorizar Modo Entrenamiento';
+                // Botón principal
+                ui.authTrainingBtn.textContent = trainingState.active ? 'DESACTIVAR Modo Entrenamiento' : 'ACTIVAR Modo Entrenamiento';
+                ui.authTrainingBtn.className = trainingState.active ? 'active' : '';
                 
-                // Estado del botón de captura
-                ui.toggleCaptureBtn.disabled = !trainingAuthorized;
-                ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura' : '2. Iniciar Captura';
-                
-                // Estado de los campos de referencia
-                const canEnterReference = !isCapturing && trainingAuthorized && 
-                    (ui.captureStatus.textContent.includes('Detenida') || ui.captureStatus.textContent.includes('listas'));
-                
-                ui.sysRef.disabled = !canEnterReference;
-                ui.diaRef.disabled = !canEnterReference;
-                ui.hrRef.disabled = !canEnterReference;
-                ui.saveSampleBtn.disabled = !canEnterReference;
-                
-                console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing, 'Puede ingresar refs:', canEnterReference);
+                if (trainingState.active) {
+                    // Actualizar estado según fase
+                    switch(trainingState.phase) {
+                        case 'stabilizing':
+                            ui.trainingStatus.textContent = 'ESTABILIZANDO (5 segundos)';
+                            ui.trainingStatus.className = 'status-capturing';
+                            ui.phaseInfo.textContent = 'Mantenga dedo estable. NO encienda tensiómetro aún.';
+                            ui.startMeasurementBtn.disabled = true;
+                            ui.finishMeasurementBtn.disabled = true;
+                            ui.stopTrainingBtn.disabled = false;
+                            break;
+                            
+                        case 'ready_for_measurement':
+                            ui.trainingStatus.textContent = 'LISTO PARA TENSIÓMETRO';
+                            ui.trainingStatus.className = 'status-ready';
+                            ui.phaseInfo.textContent = 'Ahora ENCIENDA el tensiómetro y presione el botón.';
+                            ui.startMeasurementBtn.disabled = false;
+                            ui.finishMeasurementBtn.disabled = true;
+                            ui.stopTrainingBtn.disabled = false;
+                            break;
+                            
+                        case 'measuring':
+                            ui.trainingStatus.textContent = 'MIDIENDO (No mover)';
+                            ui.trainingStatus.className = 'status-capturing';
+                            ui.phaseInfo.textContent = 'Tensiómetro funcionando. NO mover brazos.';
+                            ui.startMeasurementBtn.disabled = true;
+                            ui.finishMeasurementBtn.disabled = false;
+                            ui.stopTrainingBtn.disabled = false;
+                            break;
+                            
+                        case 'waiting':
+                            ui.trainingStatus.textContent = 'ESPERANDO (5 segundos más)';
+                            ui.trainingStatus.className = 'status-capturing';
+                            ui.phaseInfo.textContent = 'Mantenga dedo 5 segundos más.';
+                            ui.startMeasurementBtn.disabled = true;
+                            ui.finishMeasurementBtn.disabled = true;
+                            ui.stopTrainingBtn.disabled = false;
+                            break;
+                            
+                        case 'ready_to_save':
+                            ui.trainingStatus.textContent = 'LISTO PARA GUARDAR';
+                            ui.trainingStatus.className = 'status-ready';
+                            ui.phaseInfo.textContent = 'Ingrese valores del tensiómetro y guarde.';
+                            ui.startMeasurementBtn.disabled = true;
+                            ui.finishMeasurementBtn.disabled = true;
+                            ui.stopTrainingBtn.disabled = false;
+                            ui.sysRef.disabled = false;
+                            ui.diaRef.disabled = false;
+                            ui.hrRef.disabled = false;
+                            ui.saveSampleBtn.disabled = false;
+                            break;
+                    }
+                    
+                    // Calcular progreso aproximado
+                    let progress = 0;
+                    switch(trainingState.phase) {
+                        case 'stabilizing': progress = 20; break;
+                        case 'ready_for_measurement': progress = 30; break;
+                        case 'measuring': progress = 60; break;
+                        case 'waiting': progress = 80; break;
+                        case 'ready_to_save': progress = 100; break;
+                    }
+                    ui.progressFill.style.width = progress + '%';
+                    
+                } else {
+                    ui.trainingStatus.textContent = 'Inactivo';
+                    ui.trainingStatus.className = 'status-active';
+                    ui.phaseInfo.textContent = '---';
+                    ui.progressFill.style.width = '0%';
+                    
+                    // Deshabilitar todos los controles
+                    ui.startMeasurementBtn.disabled = true;
+                    ui.finishMeasurementBtn.disabled = true;
+                    ui.stopTrainingBtn.disabled = true;
+                    ui.sysRef.disabled = true;
+                    ui.diaRef.disabled = true;
+                    ui.hrRef.disabled = true;
+                    ui.saveSampleBtn.disabled = true;
+                }
             }
 
-            // Event listeners para entrenamiento
+            // EVENTOS DE ENTRENAMIENTO
+
             ui.authTrainingBtn.addEventListener('click', () => {
-                trainingAuthorized = !trainingAuthorized;
-                
-                if (trainingAuthorized) {
-                    ui.captureStatus.textContent = 'Autorizando entrenamiento...';
-                    updateTrainingUI();
+                if (!trainingState.active) {
+                    // ACTIVAR entrenamiento
+                    console.log('Activando modo entrenamiento...');
                     
-                    // Iniciar entrenamiento nuevo
-                    fetch('/api/training/start', { method: 'POST' })
+                    fetch('/api/start_capture', { method: 'POST' })
                         .then(res => res.json())
                         .then(data => {
-                            console.log('Entrenamiento iniciado:', data);
-                            if (data.success) {
-                                ui.captureStatus.textContent = 'Entrenamiento autorizado. Presione "Iniciar Captura".';
+                            console.log('Respuesta start_capture:', data);
+                            if (data.success || data.status === 'success') {
+                                trainingState.active = true;
+                                trainingState.phase = 'stabilizing';
+                                trainingState.startTime = Date.now();
+                                trainingState.totalSamples = 0;
+                                
+                                // Simular progreso de estabilización
+                                setTimeout(() => {
+                                    if (trainingState.active && trainingState.phase === 'stabilizing') {
+                                        trainingState.phase = 'ready_for_measurement';
+                                        updateTrainingUI();
+                                    }
+                                }, 5000);
+                                
+                                updateTrainingUI();
                             } else {
-                                ui.captureStatus.textContent = 'Error: ' + (data.error || 'Error desconocido');
-                                trainingAuthorized = false;
+                                alert('Error activando entrenamiento: ' + (data.error || 'Error desconocido'));
                             }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            alert('Error de conexión al activar entrenamiento');
+                        });
+                        
+                } else {
+                    // DESACTIVAR entrenamiento
+                    console.log('Desactivando modo entrenamiento...');
+                    
+                    fetch('/api/stop_capture', { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => {
+                            console.log('Respuesta stop_capture:', data);
+                            trainingState.active = false;
+                            trainingState.phase = 'idle';
+                            
+                            // Limpiar campos
+                            ui.sysRef.value = '';
+                            ui.diaRef.value = '';
+                            ui.hrRef.value = '';
+                            
                             updateTrainingUI();
                         })
                         .catch(error => {
-                            console.error('Error iniciando entrenamiento:', error);
-                            ui.captureStatus.textContent = 'Error de conexión al autorizar';
-                            trainingAuthorized = false;
+                            console.error('Error:', error);
+                            // Desactivar de todas formas
+                            trainingState.active = false;
+                            trainingState.phase = 'idle';
                             updateTrainingUI();
                         });
-                } else {
-                    // Detener entrenamiento
-                    if (isCapturing) {
-                        isCapturing = false;
-                        fetch('/api/training/stop', { method: 'POST' });
-                    }
-                    ui.captureStatus.textContent = '';
+                }
+            });
+
+            ui.startMeasurementBtn.addEventListener('click', () => {
+                if (trainingState.phase === 'ready_for_measurement') {
+                    console.log('Iniciando fase de medición...');
+                    trainingState.phase = 'measuring';
                     updateTrainingUI();
                 }
             });
 
-            ui.toggleCaptureBtn.addEventListener('click', () => {
-                if (!trainingAuthorized) {
-                    console.log('Entrenamiento no autorizado');
-                    return;
+            ui.finishMeasurementBtn.addEventListener('click', () => {
+                if (trainingState.phase === 'measuring') {
+                    console.log('Finalizando medición...');
+                    trainingState.phase = 'waiting';
+                    
+                    // Simular 5 segundos de espera
+                    setTimeout(() => {
+                        if (trainingState.active && trainingState.phase === 'waiting') {
+                            trainingState.phase = 'ready_to_save';
+                            updateTrainingUI();
+                        }
+                    }, 5000);
+                    
+                    updateTrainingUI();
                 }
+            });
+
+            ui.stopTrainingBtn.addEventListener('click', () => {
+                console.log('Deteniendo entrenamiento manualmente...');
                 
-                if (!isCapturing) {
-                    // INICIAR captura
-                    isCapturing = true;
-                    ui.captureStatus.textContent = 'Iniciando captura...';
-                    updateTrainingUI();
-                    
-                    console.log('Iniciando captura de entrenamiento');
-                    // No hacer fetch aquí, solo cambiar estado visual
-                    ui.captureStatus.textContent = 'Capturando datos... Mantenga dedo estable.';
-                    
-                } else {
-                    // DETENER captura
-                    isCapturing = false;
-                    ui.captureStatus.textContent = 'Deteniendo captura...';
-                    updateTrainingUI();
-                    
-                    console.log('Deteniendo captura de entrenamiento');
-                    
-                    fetch('/api/training/stop', { method: 'POST' })
-                        .then(res => res.json())
-                        .then(data => {
-                            console.log('Captura detenida:', data);
-                            if (data.success) {
-                                ui.captureStatus.textContent = `Captura Detenida. ${data.session_summary?.total_samples || 0} muestras listas. Ingrese valores.`;
-                            } else {
-                                ui.captureStatus.textContent = 'Error deteniendo: ' + (data.error || 'Error desconocido');
-                            }
+                fetch('/api/stop_capture', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        console.log('Entrenamiento detenido:', data);
+                        if (data.success || data.status === 'success') {
+                            trainingState.phase = 'ready_to_save';
                             updateTrainingUI();
-                        })
-                        .catch(error => {
-                            console.error('Error deteniendo captura:', error);
-                            ui.captureStatus.textContent = 'Error de conexión al detener';
-                            updateTrainingUI();
-                        });
-                }
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        trainingState.phase = 'ready_to_save';
+                        updateTrainingUI();
+                    });
             });
 
             ui.saveSampleBtn.addEventListener('click', () => {
                 const refData = { 
-                    sys_ref: ui.sysRef.value, 
-                    dia_ref: ui.diaRef.value, 
-                    hr_ref: ui.hrRef.value 
+                    sys_ref: parseInt(ui.sysRef.value), 
+                    dia_ref: parseInt(ui.diaRef.value), 
+                    hr_ref: parseInt(ui.hrRef.value)
                 };
                 
                 if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
@@ -338,7 +495,24 @@
                     return;
                 }
                 
-                fetch('/api/training/save', {
+                if (refData.sys_ref < 70 || refData.sys_ref > 250) {
+                    alert("SYS debe estar entre 70 y 250 mmHg");
+                    return;
+                }
+                
+                if (refData.dia_ref < 40 || refData.dia_ref > 150) {
+                    alert("DIA debe estar entre 40 y 150 mmHg");
+                    return;
+                }
+                
+                if (refData.hr_ref < 40 || refData.hr_ref > 200) {
+                    alert("HR debe estar entre 40 y 200 bpm");
+                    return;
+                }
+                
+                console.log('Guardando datos de entrenamiento:', refData);
+                
+                fetch('/api/save_training_data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(refData)
@@ -346,25 +520,28 @@
                 .then(res => res.json())
                 .then(data => {
                     console.log('Respuesta guardar:', data);
-                    if (data.success) {
-                        alert("Muestra guardada y enviada a Google Drive exitosamente!");
-                        ui.captureStatus.textContent = 'Listo para nueva captura.';
+                    if (data.success || data.status === 'success') {
+                        alert("Datos guardados exitosamente en Google Drive!");
+                        
+                        // Resetear entrenamiento
+                        trainingState.active = false;
+                        trainingState.phase = 'idle';
                         ui.sysRef.value = '';
                         ui.diaRef.value = '';
                         ui.hrRef.value = '';
-                        trainingAuthorized = false;
                         updateTrainingUI();
+                        
                     } else {
-                        alert("Error al guardar la muestra: " + (data.error || "Error desconocido"));
+                        alert("Error al guardar: " + (data.error || "Error desconocido"));
                     }
                 })
                 .catch(error => {
                     console.error('Error guardando:', error);
-                    alert("Error de conexion al guardar");
+                    alert("Error de conexión al guardar");
                 });
             });
 
-            // Funcion para actualizar tabla de mediciones
+            // Función para actualizar tabla de mediciones
             window.actualizarTablaMediciones = function() {
                 console.log('Actualizando tabla de mediciones...');
                 
@@ -401,8 +578,8 @@
                     });
             };
 
-            // Inicializar aplicacion
-            console.log('Inicializando aplicacion...');
+            // Inicializar aplicación
+            console.log('Inicializando aplicación corregida...');
             updateTrainingUI();
             initializeSocket();
             actualizarTablaMediciones();
