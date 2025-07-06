@@ -246,18 +246,17 @@
                     
                     socket.on('capture_count_update', function(data) {
                         if (isCapturing) {
-                            ui.captureStatus.textContent = `Capturando...`;
-                            ui.muestras_count.textContent = `(${data.count} muestras) 📊`;
+                            ui.muestras_count.textContent = data.count;
                         }
                     });
                     
-                    // Actualizar contador de muestras desde datos del ESP32
+                    // Actualizar contador de muestras desde datos del ESP32 - SOLO DURANTE ENTRENAMIENTO
                     socket.on('update_data', function(data) {
-                        // ... código anterior ...
-                        
-                        // Actualizar contador de muestras durante entrenamiento
-                        if (trainingAuthorized && data.muestras_recolectadas !== undefined) {
-                            ui.muestras_count.textContent = data.muestras_recolectadas + "/50 📈";
+                        // Este evento es para la predicción ML normal (50 muestras)
+                        // NO interferir con el entrenamiento que es independiente
+                        if (!trainingAuthorized) {
+                            // Solo actualizar si NO estamos en modo entrenamiento
+                            // El entrenamiento usa su propio sistema de captura
                         }
                     });
                     
@@ -290,7 +289,7 @@
                 if (!trainingAuthorized) {
                     ui.muestras_count.textContent = '---';
                 } else if (!isCapturing && ui.muestras_count.textContent === '---') {
-                    ui.muestras_count.textContent = '0/50 📊';
+                    ui.muestras_count.textContent = '0';
                 }
                 
                 console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing, 'Puede ingresar refs:', canEnterReference);
@@ -308,6 +307,7 @@
                     
                     // NO hacer fetch automático aquí, solo autorizar
                     ui.captureStatus.textContent = 'Entrenamiento autorizado. Presione "Iniciar Captura" 🚀';
+                    ui.muestras_count.textContent = '0';
                     
                 } else {
                     // DESACTIVAR entrenamiento
@@ -340,7 +340,8 @@
                         .then(data => {
                             console.log('Captura iniciada:', data);
                             if (data.success || data.status === 'success') {
-                                ui.captureStatus.textContent = 'Capturando datos... Mantenga dedo estable 🎯';
+                                ui.captureStatus.textContent = 'Capturando datos del sensor...';
+                                ui.muestras_count.textContent = '0';
                             } else {
                                 ui.captureStatus.textContent = 'Error: ' + (data.error || 'Error desconocido');
                                 isCapturing = false;
@@ -366,7 +367,8 @@
                             console.log('Captura detenida:', data);
                             if (data.success || data.status === 'success') {
                                 const samples = data.muestras_en_buffer || data.session_summary?.total_samples || 0;
-                                ui.captureStatus.textContent = `Captura Detenida. ${samples} muestras listas. Ingrese valores 📝`;
+                                ui.captureStatus.textContent = `Captura Detenida. Ingrese valores 📝`;
+                                ui.muestras_count.textContent = samples;
                             } else {
                                 ui.captureStatus.textContent = 'Error deteniendo: ' + (data.error || 'Error desconocido');
                             }
