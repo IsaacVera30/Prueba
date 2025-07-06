@@ -1,4 +1,4 @@
-# app.py - VERSION MODULAR COMPLETA SIN ERRORES WEBSOCKET
+# app.py - VERSION MODULAR COMPLETA SIN ERRORES WEBSOCKET - CORREGIDA
 # Aplicación principal usando arquitectura modular
 
 import eventlet
@@ -24,7 +24,7 @@ logging.getLogger('eventlet').setLevel(logging.WARNING)
 from modules.ml_processor import MLProcessor
 from modules.database_manager import DatabaseManager
 from modules.alert_system import AlertSystem
-from modules.data_collector import DataCollector
+from modules.data_collector import RealisticTrainingCollector  # CORREGIDO
 from modules.websocket_handler import WebSocketHandler
 from modules.api_nodo_datos import api_nodo_bp
 
@@ -63,7 +63,7 @@ class MedicalMonitorApp:
         self.ml_processor = MLProcessor()
         self.db_manager = DatabaseManager()
         self.alert_system = AlertSystem()
-        self.data_collector = DataCollector()
+        self.data_collector = RealisticTrainingCollector()  # CORREGIDO
         self.websocket_handler = WebSocketHandler(self.socketio)
         
         # Variables de estado
@@ -115,17 +115,12 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/start_capture", methods=["POST"])
         def start_capture():
-            """Iniciar captura de datos para entrenamiento"""
+            """Iniciar captura de datos para entrenamiento - CORREGIDO"""
             try:
-                result = self.data_collector.start_capture()
+                # Usar el método correcto del DataCollector
+                result = self.data_collector.start_training_session()
                 
-                # Crear archivo lock para compatibilidad
-                with open(self.capture_lock_file, "w") as f:
-                    f.write("capturing")
-                
-                self.buffer_datos_entrenamiento = []
-                
-                logger.info("Captura de entrenamiento iniciada")
+                logger.info("Sesión de entrenamiento iniciada")
                 return jsonify(result)
             
             except Exception as e:
@@ -134,14 +129,12 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/stop_capture", methods=["POST"])
         def stop_capture():
-            """Detener captura de datos"""
+            """Detener captura de datos - CORREGIDO"""
             try:
-                result = self.data_collector.stop_capture()
+                # Usar el método correcto del DataCollector  
+                result = self.data_collector.stop_training_session()
                 
-                # Añadir información del buffer local
-                result["muestras_en_buffer"] = len(self.buffer_datos_entrenamiento)
-                
-                logger.info(f"Captura detenida. {len(self.buffer_datos_entrenamiento)} muestras")
+                logger.info(f"Captura detenida")
                 return jsonify(result)
             
             except Exception as e:
@@ -150,26 +143,40 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/save_training_data", methods=["POST"])
         def save_training_data():
-            """Guardar datos de entrenamiento"""
+            """Guardar datos de entrenamiento - CORREGIDO"""
             try:
-                if not os.path.exists(self.capture_lock_file):
-                    return jsonify({"error": "La captura no está activa"}), 400
-                
                 ref_data = request.get_json()
                 if not ref_data:
                     return jsonify({"error": "Datos de referencia requeridos"}), 400
                 
-                # Procesar buffer y guardar
-                self._process_and_save_training_data(ref_data)
+                # Usar el método correcto del DataCollector
+                result = self.data_collector.save_training_data(ref_data)
                 
-                return jsonify({
-                    "status": "success",
-                    "message": "Datos de entrenamiento guardados",
-                    "samples_processed": len(self.buffer_datos_entrenamiento)
-                })
+                return jsonify(result)
             
             except Exception as e:
                 logger.error(f"Error guardando datos entrenamiento: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route("/api/training/add_sample", methods=["POST"])  
+        def add_training_sample():
+            """Añadir muestra durante entrenamiento"""
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data"}), 400
+                    
+                # Añadir muestra al entrenamiento
+                result = self.data_collector.add_sample(data)
+                
+                # Notificar conteo vía WebSocket
+                if result.get('success'):
+                    self.websocket_handler.emit_capture_count(result.get('total_samples', 0))
+                
+                return jsonify(result)
+                
+            except Exception as e:
+                logger.error(f"Error añadiendo muestra: {e}")
                 return jsonify({"error": str(e)}), 500
         
         @self.app.route("/api/ultimas_mediciones")
@@ -267,7 +274,7 @@ class MedicalMonitorApp:
                         "database": self.db_manager.get_system_health(),
                         "alerts": self.alert_system.get_status(),
                         "websocket": self.websocket_handler.get_status(),
-                        "data_collector": self.data_collector.get_status()
+                        "data_collector": self.data_collector.get_training_status()
                     }
                 }
                 return jsonify(status)
@@ -297,7 +304,7 @@ class MedicalMonitorApp:
                     "ml_ready": self.ml_processor.is_ready(),
                     "db_connected": self.db_manager.is_connected(),
                     "alerts_configured": self.alert_system.is_configured(),
-                    "capture_active": os.path.exists(self.capture_lock_file),
+                    "capture_active": self.data_collector.get_training_status().get('active', False),
                     "connected_clients": self.websocket_handler.get_connected_clients_count()
                 }
                 self.socketio.emit('system_status', status)
@@ -313,8 +320,33 @@ class MedicalMonitorApp:
             if not data:
                 return jsonify({"error": "No JSON data"}), 400
             
-            # Redirigir al endpoint modular
-            # Esto mantiene compatibilidad con ESP32 que usen /api/data
+            # CORREGIDO: Verificar si estamos en modo entrenamiento
+            training_status = self.data_collector.get_training_status()
+            if training_status.get('active', False):
+                # MODO ENTRENAMIENTO: Añadir muestra al data_collector
+                try:
+                    result = self.data_collector.add_sample(data)
+                    
+                    # Notificar conteo vía WebSocket
+                    if result.get('success'):
+                        self.websocket_handler.emit_capture_count(result.get('total_samples', 0))
+                    
+                    return jsonify({
+                        "status": "entrenamiento",
+                        "message": f"Muestra añadida. Total: {result.get('total_samples', 0)}",
+                        "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+                        "nivel": "Entrenamiento activo"
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error en modo entrenamiento: {e}")
+                    return jsonify({
+                        "status": "error_entrenamiento",
+                        "sys": 0, "dia": 0, "hr": 0, "spo2": 0,
+                        "nivel": "Error entrenamiento"
+                    })
+            
+            # MODO PREDICCIÓN NORMAL (redirigir al endpoint modular)
             return self._process_esp32_data_legacy(data)
         
         except Exception as e:
@@ -333,12 +365,6 @@ class MedicalMonitorApp:
             response = {"sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"}
             self.websocket_handler.emit_update(data)
             return jsonify(response)
-        
-        # Modo captura de entrenamiento
-        if os.path.exists(self.capture_lock_file):
-            self.buffer_datos_entrenamiento.append(data)
-            self.websocket_handler.emit_capture_count(len(self.buffer_datos_entrenamiento))
-            return jsonify({"status": "capturando", "muestras": len(self.buffer_datos_entrenamiento)})
         
         # Modo predicción normal
         response = {"sys": 0, "dia": 0, "hr": 0, "spo2": 0, "nivel": "Sin datos"}
@@ -404,55 +430,6 @@ class MedicalMonitorApp:
         self.websocket_handler.emit_update({**data, **response})
         
         return jsonify(response)
-    
-    def _process_and_save_training_data(self, ref_data):
-        """Procesar y guardar datos de entrenamiento"""
-        if not self.buffer_datos_entrenamiento:
-            raise ValueError("No hay datos en el buffer")
-        
-        def process_async():
-            try:
-                # Calcular promedios del buffer
-                import numpy as np
-                
-                hr_values = [float(d.get("hr_promedio", 0)) for d in self.buffer_datos_entrenamiento]
-                spo2_values = [float(d.get("spo2_sensor", 0)) for d in self.buffer_datos_entrenamiento]
-                ir_values = [float(d.get("ir", 0)) for d in self.buffer_datos_entrenamiento]
-                red_values = [float(d.get("red", 0)) for d in self.buffer_datos_entrenamiento]
-                
-                # Preparar muestra final
-                training_sample = {
-                    "hr_promedio_sensor": np.mean(hr_values) if hr_values else 0,
-                    "spo2_promedio_sensor": np.mean(spo2_values) if spo2_values else 0,
-                    "ir_mean_filtrado": np.mean(ir_values) if ir_values else 0,
-                    "red_mean_filtrado": np.mean(red_values) if red_values else 0,
-                    "ir_std_filtrado": np.std(ir_values) if len(ir_values) > 1 else 0,
-                    "red_std_filtrado": np.std(red_values) if len(red_values) > 1 else 0,
-                    "sys_ref": ref_data.get('sys_ref'),
-                    "dia_ref": ref_data.get('dia_ref'),
-                    "hr_ref": ref_data.get('hr_ref'),
-                    "timestamp_captura": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                # Guardar usando data collector
-                result = self.data_collector.save_training_sample(training_sample)
-                
-                if result.get('success'):
-                    logger.info(f"Datos de entrenamiento guardados: {len(self.buffer_datos_entrenamiento)} muestras")
-                else:
-                    logger.error(f"Error guardando entrenamiento: {result.get('error')}")
-                
-                # Limpiar
-                self.buffer_datos_entrenamiento = []
-                if os.path.exists(self.capture_lock_file):
-                    os.remove(self.capture_lock_file)
-                
-            except Exception as e:
-                logger.error(f"Error procesando datos entrenamiento: {e}")
-        
-        # Ejecutar de forma asíncrona
-        thread = threading.Thread(target=process_async)
-        thread.start()
     
     def _classify_pressure_level(self, sys_pressure, dia_pressure):
         """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
