@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Monitoreo de Salud - Entrenamiento Corregido</title>
+    <title>Panel de Monitoreo de Salud - Sistema Corregido</title>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
@@ -117,15 +117,55 @@
             background-color: #28a745;
             transition: width 0.3s ease;
         }
+        .system-status {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+        .training-mode {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+        }
+        .ml-mode {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        .error-message {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success-message {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>Panel de Monitoreo de Salud</h1>
+    <h1>Panel de Monitoreo de Salud - Buffers Separados</h1>
+
+    <!-- INDICADOR DE MODO ACTUAL -->
+    <div id="modeIndicator" class="system-status ml-mode">
+        <strong>MODO ACTUAL:</strong> <span id="currentMode">Prediccion ML</span> | 
+        <strong>BUFFER:</strong> <span id="currentBuffer">ML Buffer (50 muestras)</span>
+    </div>
 
     <div class="container">
         <h2>Lecturas del Sensor</h2>
         <p>IR: <strong id="ir">---</strong></p>
         <p>RED: <strong id="red">---</strong></p>
+        <p>Estado del dedo: <strong id="fingerStatus">Esperando...</strong></p>
     </div>
 
     <div class="container">
@@ -135,16 +175,24 @@
         <p>HR ML: <strong id="hr">---</strong> bpm</p>
         <p>SpO2 ML: <strong id="spo2">---</strong> %</p>
         <p>Estado: <strong id="nivel">---</strong></p>
+        <p>Muestras ML: <strong id="mlSamplesCount">0/50</strong></p>
     </div>
 
     <div class="container">
-        <h2>Entrenamiento ML 🧠</h2>
-        <p>Este modo permite capturar datos del sensor para generar una nueva fila de entrenamiento, asociandola a una medicion de referencia de un tensiometro real.</p>
-        <button id="authTrainingBtn">1. Autorizar Modo Entrenamiento 🔓</button>
+        <h2>Entrenamiento ML - BUFFER INDEPENDIENTE</h2>
+        <p><strong>IMPORTANTE:</strong> Este sistema tiene su propio buffer, completamente separado del ML. No se reinicia cuando quita el dedo, solo cuando envía los datos al Drive.</p>
+        
+        <button id="authTrainingBtn">1. Autorizar Modo Entrenamiento</button>
+        
         <div id="training-subsection" class="training-subsection">
-            <button id="toggleCaptureBtn" disabled>2. Iniciar Captura 📊</button>
+            <div class="system-status training-mode">
+                <strong>MODO ENTRENAMIENTO ACTIVO:</strong> Los datos van al buffer de entrenamiento, NO al ML.
+            </div>
+            
+            <button id="toggleCaptureBtn" disabled>2. Iniciar Captura de Entrenamiento</button>
             <span id="capture-status" style="font-weight: bold; margin-left: 10px;"></span>
-            <span id="muestras_count" style="font-weight: bold; margin-left: 10px; color: #007bff;">---</span>
+            <span id="training_samples_count" style="font-weight: bold; margin-left: 10px; color: #007bff;">0 muestras</span>
+            
             <div style="margin-top: 15px;">
                 <p><strong>Paso 3:</strong> Despues de detener la captura, ingrese los valores de referencia.</p>
                 <div class="form-group">
@@ -153,7 +201,7 @@
                     <label>HR Referencia: <input type="number" id="hrRef" disabled></label>
                 </div>
             </div>
-            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive 💾</button>
+            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive</button>
         </div>
     </div>
 
@@ -185,6 +233,7 @@
                 // Lecturas del sensor
                 ir: document.getElementById('ir'),
                 red: document.getElementById('red'),
+                fingerStatus: document.getElementById('fingerStatus'),
                 
                 // Prediccion ML
                 sys: document.getElementById('sys'),
@@ -192,15 +241,23 @@
                 hr: document.getElementById('hr'),
                 spo2: document.getElementById('spo2'),
                 nivel: document.getElementById('nivel'),
-                muestras_count: document.getElementById('muestras_count'),
+                mlSamplesCount: document.getElementById('mlSamplesCount'),
+                
+                // Entrenamiento
                 authTrainingBtn: document.getElementById('authTrainingBtn'),
                 trainingSubsection: document.getElementById('training-subsection'),
                 toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
                 saveSampleBtn: document.getElementById('saveSampleBtn'),
                 captureStatus: document.getElementById('capture-status'),
+                trainingSamplesCount: document.getElementById('training_samples_count'),
                 sysRef: document.getElementById('sysRef'),
                 diaRef: document.getElementById('diaRef'),
                 hrRef: document.getElementById('hrRef'),
+                
+                // Indicadores de modo
+                modeIndicator: document.getElementById('modeIndicator'),
+                currentMode: document.getElementById('currentMode'),
+                currentBuffer: document.getElementById('currentBuffer'),
                 
                 // Tabla
                 medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
@@ -217,10 +274,12 @@
                     
                     socket.on('connect', () => {
                         console.log('Conectado al servidor Socket.IO');
+                        updateConnectionStatus(true);
                     });
                     
                     socket.on('disconnect', () => {
                         console.log('Desconectado del servidor Socket.IO');
+                        updateConnectionStatus(false);
                     });
 
                     // Evento principal para actualizacion de datos
@@ -228,15 +287,31 @@
                         console.log('Datos recibidos:', data);
                         
                         // Actualizar valores del sensor
-                        if (data.ir !== undefined) ui.ir.textContent = data.ir;
+                        if (data.ir !== undefined) {
+                            ui.ir.textContent = data.ir;
+                            updateFingerStatus(data.ir);
+                        }
                         if (data.red !== undefined) ui.red.textContent = data.red;
                         
-                        // Actualizar predicciones ML
-                        if (data.sys !== undefined) ui.sys.textContent = parseFloat(data.sys).toFixed(1);
-                        if (data.dia !== undefined) ui.dia.textContent = parseFloat(data.dia).toFixed(1);
-                        if (data.hr !== undefined) ui.hr.textContent = Math.round(data.hr);
-                        if (data.spo2 !== undefined) ui.spo2.textContent = Math.round(data.spo2);
-                        if (data.nivel !== undefined) ui.nivel.textContent = data.nivel;
+                        // Actualizar predicciones ML solo si NO estamos en modo entrenamiento
+                        if (!trainingAuthorized) {
+                            if (data.sys !== undefined) ui.sys.textContent = parseFloat(data.sys).toFixed(1);
+                            if (data.dia !== undefined) ui.dia.textContent = parseFloat(data.dia).toFixed(1);
+                            if (data.hr !== undefined) ui.hr.textContent = Math.round(data.hr);
+                            if (data.spo2 !== undefined) ui.spo2.textContent = Math.round(data.spo2);
+                            if (data.nivel !== undefined) ui.nivel.textContent = data.nivel;
+                            if (data.muestras_recolectadas !== undefined) {
+                                ui.mlSamplesCount.textContent = data.muestras_recolectadas + "/50";
+                            }
+                        }
+                    });
+
+                    // Evento específico para actualizaciones de entrenamiento
+                    socket.on('training_update', function(data) {
+                        console.log('Actualización de entrenamiento:', data);
+                        if (data.training_active && data.training_count !== undefined) {
+                            ui.trainingSamplesCount.textContent = data.training_count + " muestras";
+                        }
                     });
 
                     socket.on('new_record_saved', () => {
@@ -244,24 +319,36 @@
                         actualizarTablaMediciones();
                     });
                     
-                    socket.on('capture_count_update', function(data) {
-                        if (isCapturing) {
-                            ui.muestras_count.textContent = data.count;
-                        }
-                    });
-                    
-                    // Actualizar contador de muestras desde datos del ESP32 - SOLO DURANTE ENTRENAMIENTO
-                    socket.on('update_data', function(data) {
-                        // Este evento es para la predicción ML normal (50 muestras)
-                        // NO interferir con el entrenamiento que es independiente
-                        if (!trainingAuthorized) {
-                            // Solo actualizar si NO estamos en modo entrenamiento
-                            // El entrenamiento usa su propio sistema de captura
-                        }
-                    });
-                    
                 } catch (error) {
                     console.error('Error inicializando Socket.IO:', error);
+                }
+            }
+
+            function updateConnectionStatus(connected) {
+                ui.fingerStatus.textContent = connected ? "Conectado al servidor" : "Desconectado";
+                ui.fingerStatus.style.color = connected ? "#28a745" : "#dc3545";
+            }
+
+            function updateFingerStatus(irValue) {
+                const ir = parseInt(irValue);
+                if (ir > 50000) {
+                    ui.fingerStatus.textContent = "Dedo detectado";
+                    ui.fingerStatus.style.color = "#28a745";
+                } else {
+                    ui.fingerStatus.textContent = "Sin dedo";
+                    ui.fingerStatus.style.color = "#dc3545";
+                }
+            }
+
+            function updateModeIndicator() {
+                if (trainingAuthorized) {
+                    ui.modeIndicator.className = "system-status training-mode";
+                    ui.currentMode.textContent = "Entrenamiento";
+                    ui.currentBuffer.textContent = "Training Buffer (independiente)";
+                } else {
+                    ui.modeIndicator.className = "system-status ml-mode";
+                    ui.currentMode.textContent = "Prediccion ML";
+                    ui.currentBuffer.textContent = "ML Buffer (50 muestras)";
                 }
             }
 
@@ -270,29 +357,65 @@
                 ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
                 
                 // Texto del botón principal
-                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento 🔒' : '1. Autorizar Modo Entrenamiento 🔓';
+                ui.authTrainingBtn.textContent = trainingAuthorized ? 
+                    'Desactivar Modo Entrenamiento' : 
+                    '1. Autorizar Modo Entrenamiento';
                 
                 // Estado del botón de captura
                 ui.toggleCaptureBtn.disabled = !trainingAuthorized;
-                ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura ⏹️' : '2. Iniciar Captura 📊';
+                
+                if (trainingAuthorized) {
+                    ui.toggleCaptureBtn.textContent = isCapturing ? 
+                        '2. Detener Captura' : 
+                        '2. Iniciar Captura de Entrenamiento';
+                    
+                    if (isCapturing) {
+                        ui.toggleCaptureBtn.className = 'stop';
+                    } else {
+                        ui.toggleCaptureBtn.className = '';
+                    }
+                }
                 
                 // Estado de los campos de referencia
                 const canEnterReference = !isCapturing && trainingAuthorized && 
-                    (ui.captureStatus.textContent.includes('Detenida') || ui.captureStatus.textContent.includes('listas'));
+                    (ui.captureStatus.textContent.includes('Detenida') || 
+                     ui.captureStatus.textContent.includes('Ingrese valores'));
                 
                 ui.sysRef.disabled = !canEnterReference;
                 ui.diaRef.disabled = !canEnterReference;
                 ui.hrRef.disabled = !canEnterReference;
                 ui.saveSampleBtn.disabled = !canEnterReference;
                 
-                // Actualizar contador visual
+                // Limpiar campos si se desactiva entrenamiento
                 if (!trainingAuthorized) {
-                    ui.muestras_count.textContent = '---';
-                } else if (!isCapturing && ui.muestras_count.textContent === '---') {
-                    ui.muestras_count.textContent = '0';
+                    ui.trainingSamplesCount.textContent = '0 muestras';
+                    ui.captureStatus.textContent = '';
+                    ui.sysRef.value = '';
+                    ui.diaRef.value = '';
+                    ui.hrRef.value = '';
+                    isCapturing = false;
                 }
                 
-                console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing, 'Puede ingresar refs:', canEnterReference);
+                // Actualizar indicador de modo
+                updateModeIndicator();
+                
+                console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing);
+            }
+
+            function showMessage(message, type = 'info') {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = type === 'error' ? 'error-message' : 'success-message';
+                messageDiv.textContent = message;
+                
+                // Insertar después del indicador de modo
+                ui.modeIndicator.parentNode.insertBefore(messageDiv, ui.modeIndicator.nextSibling);
+                
+                // Remover después de 5 segundos
+                setTimeout(() => {
+                    if (messageDiv.parentNode) {
+                        messageDiv.parentNode.removeChild(messageDiv);
+                    }
+                }, 5000);
             }
 
             // EVENTOS DE ENTRENAMIENTO
@@ -301,26 +424,32 @@
                 if (!trainingAuthorized) {
                     // ACTIVAR entrenamiento
                     trainingAuthorized = true;
-                    
-                    ui.captureStatus.textContent = 'Autorizando entrenamiento...';
+                    ui.captureStatus.textContent = 'Entrenamiento autorizado. Presione "Iniciar Captura"';
                     updateTrainingUI();
-                    
-                    // NO hacer fetch automático aquí, solo autorizar
-                    ui.captureStatus.textContent = 'Entrenamiento autorizado. Presione "Iniciar Captura" 🚀';
-                    ui.muestras_count.textContent = '0';
+                    showMessage('Modo entrenamiento activado. Los datos iran al buffer de entrenamiento.', 'success');
                     
                 } else {
                     // DESACTIVAR entrenamiento
                     if (isCapturing) {
-                        isCapturing = false;
-                        fetch('/api/stop_capture', { method: 'POST' });
+                        // Detener captura primero
+                        fetch('/api/training/stop', { method: 'POST' })
+                            .then(res => res.json())
+                            .then(data => {
+                                console.log('Captura detenida:', data);
+                                isCapturing = false;
+                                trainingAuthorized = false;
+                                updateTrainingUI();
+                                showMessage('Modo entrenamiento desactivado.', 'success');
+                            })
+                            .catch(error => {
+                                console.error('Error deteniendo captura:', error);
+                                showMessage('Error deteniendo captura', 'error');
+                            });
+                    } else {
+                        trainingAuthorized = false;
+                        updateTrainingUI();
+                        showMessage('Modo entrenamiento desactivado.', 'success');
                     }
-                    trainingAuthorized = false;
-                    ui.captureStatus.textContent = '';
-                    ui.sysRef.value = '';
-                    ui.diaRef.value = '';
-                    ui.hrRef.value = '';
-                    updateTrainingUI();
                 }
             });
 
@@ -335,16 +464,22 @@
                     ui.captureStatus.textContent = 'Iniciando captura...';
                     updateTrainingUI();
                     
-                    fetch('/api/start_capture', { method: 'POST' })
+                    fetch('/api/training/start', { 
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ patient_id: 1 })
+                    })
                         .then(res => res.json())
                         .then(data => {
                             console.log('Captura iniciada:', data);
-                            if (data.success || data.status === 'success') {
+                            if (data.success) {
                                 ui.captureStatus.textContent = 'Capturando datos del sensor...';
-                                ui.muestras_count.textContent = '0';
+                                ui.trainingSamplesCount.textContent = '0 muestras';
+                                showMessage('Captura de entrenamiento iniciada', 'success');
                             } else {
                                 ui.captureStatus.textContent = 'Error: ' + (data.error || 'Error desconocido');
                                 isCapturing = false;
+                                showMessage('Error iniciando captura: ' + data.error, 'error');
                             }
                             updateTrainingUI();
                         })
@@ -353,6 +488,7 @@
                             ui.captureStatus.textContent = 'Error de conexión al iniciar';
                             isCapturing = false;
                             updateTrainingUI();
+                            showMessage('Error de conexión al iniciar captura', 'error');
                         });
                     
                 } else {
@@ -361,16 +497,18 @@
                     ui.captureStatus.textContent = 'Deteniendo captura...';
                     updateTrainingUI();
                     
-                    fetch('/api/stop_capture', { method: 'POST' })
+                    fetch('/api/training/stop', { method: 'POST' })
                         .then(res => res.json())
                         .then(data => {
                             console.log('Captura detenida:', data);
-                            if (data.success || data.status === 'success') {
-                                const samples = data.muestras_en_buffer || data.session_summary?.total_samples || 0;
-                                ui.captureStatus.textContent = `Captura Detenida. Ingrese valores 📝`;
-                                ui.muestras_count.textContent = samples;
+                            if (data.success) {
+                                const samples = data.samples_collected || 0;
+                                ui.captureStatus.textContent = 'Captura Detenida. Ingrese valores de referencia';
+                                ui.trainingSamplesCount.textContent = samples + ' muestras';
+                                showMessage(`Captura detenida. ${samples} muestras recolectadas`, 'success');
                             } else {
                                 ui.captureStatus.textContent = 'Error deteniendo: ' + (data.error || 'Error desconocido');
+                                showMessage('Error deteniendo captura: ' + data.error, 'error');
                             }
                             updateTrainingUI();
                         })
@@ -378,6 +516,7 @@
                             console.error('Error deteniendo captura:', error);
                             ui.captureStatus.textContent = 'Error de conexión al detener';
                             updateTrainingUI();
+                            showMessage('Error de conexión al detener captura', 'error');
                         });
                 }
             });
@@ -390,11 +529,29 @@
                 };
                 
                 if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
-                    alert("Por favor, ingrese todos los valores de referencia 📋");
+                    showMessage("Por favor, ingrese todos los valores de referencia", 'error');
                     return;
                 }
                 
-                fetch('/api/save_training_data', {
+                // Validar rangos
+                const sys = parseFloat(refData.sys_ref);
+                const dia = parseFloat(refData.dia_ref);
+                const hr = parseFloat(refData.hr_ref);
+                
+                if (sys < 70 || sys > 250 || dia < 40 || dia > 150 || hr < 40 || hr > 200) {
+                    showMessage("Valores fuera de rango válido", 'error');
+                    return;
+                }
+                
+                if (dia >= sys) {
+                    showMessage("La presión diastólica debe ser menor que la sistólica", 'error');
+                    return;
+                }
+                
+                ui.saveSampleBtn.disabled = true;
+                ui.saveSampleBtn.textContent = 'Guardando...';
+                
+                fetch('/api/training/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(refData)
@@ -402,21 +559,26 @@
                 .then(res => res.json())
                 .then(data => {
                     console.log('Respuesta guardar:', data);
-                    if (data.success || data.status === 'success') {
-                        alert("Muestra guardada y enviada a Google Drive exitosamente! 🎉");
-                        ui.captureStatus.textContent = 'Listo para nueva captura ✨';
+                    if (data.success) {
+                        showMessage("Muestra guardada y enviada a Google Drive exitosamente!", 'success');
+                        ui.captureStatus.textContent = 'Listo para nueva captura';
                         ui.sysRef.value = '';
                         ui.diaRef.value = '';
                         ui.hrRef.value = '';
+                        ui.trainingSamplesCount.textContent = '0 muestras';
                         trainingAuthorized = false;
                         updateTrainingUI();
                     } else {
-                        alert("Error al guardar la muestra: " + (data.error || "Error desconocido") + " ❌");
+                        showMessage("Error al guardar la muestra: " + (data.error || "Error desconocido"), 'error');
                     }
                 })
                 .catch(error => {
                     console.error('Error guardando:', error);
-                    alert("Error de conexión al guardar ⚠️");
+                    showMessage("Error de conexión al guardar", 'error');
+                })
+                .finally(() => {
+                    ui.saveSampleBtn.disabled = false;
+                    ui.saveSampleBtn.textContent = '4. Guardar Registro y Enviar a Drive';
                 });
             });
 
@@ -457,11 +619,42 @@
                     });
             };
 
+            // Verificar estado de entrenamiento periódicamente
+            function checkTrainingStatus() {
+                fetch('/api/training/status')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.active && !trainingAuthorized) {
+                            // El entrenamiento está activo en el servidor pero no en el frontend
+                            trainingAuthorized = true;
+                            isCapturing = true;
+                            ui.captureStatus.textContent = 'Reconectado - Capturando datos...';
+                            ui.trainingSamplesCount.textContent = (data.sample_count || 0) + ' muestras';
+                            updateTrainingUI();
+                        } else if (!data.active && data.ready_to_save && data.sample_count > 0) {
+                            // Hay muestras listas para guardar
+                            if (!trainingAuthorized) {
+                                trainingAuthorized = true;
+                                isCapturing = false;
+                                ui.captureStatus.textContent = 'Captura detenida. Ingrese valores de referencia';
+                                ui.trainingSamplesCount.textContent = data.sample_count + ' muestras';
+                                updateTrainingUI();
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.debug('Error verificando estado entrenamiento:', error);
+                    });
+            }
+
             // Inicializar aplicación
             console.log('Inicializando aplicación...');
             updateTrainingUI();
             initializeSocket();
             actualizarTablaMediciones();
+            
+            // Verificar estado de entrenamiento cada 10 segundos
+            setInterval(checkTrainingStatus, 10000);
             
             // Auto-actualizar tabla cada 30 segundos
             setInterval(actualizarTablaMediciones, 30000);
