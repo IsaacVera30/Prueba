@@ -132,7 +132,7 @@ class DatabaseManager:
                 
                 # Marcar tarea como completada
                 self.operation_queue.task_done()
-                
+                self.logger.info(f"Operación BD completada: {operation.get('type')}")
             except queue.Empty:
                 continue
             except Exception as e:
