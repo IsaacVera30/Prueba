@@ -1,6 +1,6 @@
 # modules/api_nodo_datos.py
 # API especializada para recibir y procesar datos del ESP32
-# CORREGIDO: Sistema de 50 muestras (reducido de 100) y errores ML
+# CORREGIDO: Sistema de 50 muestras con limpieza automática
 
 from flask import Blueprint, request, jsonify
 import time
@@ -19,7 +19,7 @@ class SampleBuffer:
     
     def __init__(self):
         self.patient_buffers = {}  # {patient_id: [samples]}
-        self.target_samples = 50  # CAMBIADO DE 100 A 50
+        self.target_samples = 50  # 50 muestras
         self.max_inactive_time = 300  # 5 minutos para limpiar buffers inactivos
     
     def add_sample(self, patient_id, ir, red, timestamp):
@@ -163,7 +163,7 @@ class SampleBuffer:
             red_ac = np.std(red_array)
             red_dc = np.mean(red_array)
             
-            # Evitar división por cero
+# Evitar división por cero
             if ir_dc <= 0 or red_dc <= 0 or ir_ac <= 0:
                 return 98.0
             
@@ -225,7 +225,7 @@ def classify_pressure_level(sys_pressure, dia_pressure):
 def receive_raw_data():
     """
     Endpoint principal para recibir datos del ESP32
-    CORREGIDO: 50 muestras y manejo de errores ML
+    CORREGIDO: 50 muestras con limpieza automática
     """
     try:
         data = request.get_json()
@@ -354,14 +354,18 @@ def receive_raw_data():
                         response["nivel"] = "Datos inválidos"
                         response["calidad"] = "error"
                     
-                    # Limpiar buffer después de predicción
+                    # NUEVO: LIMPIEZA AUTOMÁTICA DEL BUFFER DESPUÉS DE PREDICCIÓN
                     sample_buffer.clear_patient_buffer(patient_id)
-                    logger.info(f"Buffer limpiado para paciente {patient_id}")
+                    logger.info(f"Buffer limpiado automáticamente para paciente {patient_id}")
                     
                 except Exception as e:
                     logger.error(f"Error en predicción ML: {e}")
                     response["nivel"] = "Error ML"
                     response["calidad"] = "error"
+                    
+                    # Limpiar buffer incluso en caso de error
+                    sample_buffer.clear_patient_buffer(patient_id)
+                    logger.info(f"Buffer limpiado por error para paciente {patient_id}")
             else:
                 logger.warning("ML processor no disponible")
                 response["nivel"] = "ML no disponible"
@@ -394,7 +398,7 @@ def get_patient_status(patient_id):
         status = {
             "patient_id": patient_id,
             "sample_count": sample_count,
-            "samples_needed": 50,  # CAMBIADO DE 100 A 50
+            "samples_needed": 50,
             "ready_for_ml": has_enough,
             "progress_percentage": (sample_count / 50) * 100,
             "timestamp": datetime.now().isoformat()
@@ -406,25 +410,46 @@ def get_patient_status(patient_id):
         logger.error(f"Error obteniendo estado del paciente {patient_id}: {e}")
         return jsonify({"error": "Error interno"}), 500
 
-# Resto de endpoints sin cambios...
 @api_nodo_bp.route('/buffer_status', methods=['GET'])
 def get_buffer_status():
     """Obtener estado completo de todos los buffers de pacientes"""
     try:
-        status = sample_buffer.get_buffer_status()
+        all_patients = {}
+        for patient_id, buffer in sample_buffer.patient_buffers.items():
+            all_patients[patient_id] = {
+                "sample_count": len(buffer),
+                "progress_percentage": (len(buffer) / 50) * 100,
+                "ready_for_ml": len(buffer) >= 50
+            }
+        
         return jsonify({
-            "active_patients": len(status),
-            "patient_buffers": status,
-            "target_samples": 50,  # CAMBIADO
+            "active_patients": len(all_patients),
+            "patient_buffers": all_patients,
+            "target_samples": 50,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
         logger.error(f"Error obteniendo estado de buffers: {e}")
         return jsonify({"error": "Error interno"}), 500
 
+@api_nodo_bp.route('/clear_buffer/<int:patient_id>', methods=['POST'])
+def clear_patient_buffer_endpoint(patient_id):
+    """Endpoint para limpiar manualmente el buffer de un paciente"""
+    try:
+        sample_buffer.clear_patient_buffer(patient_id)
+        logger.info(f"Buffer limpiado manualmente para paciente {patient_id}")
+        return jsonify({
+            "success": True,
+            "message": f"Buffer del paciente {patient_id} limpiado",
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error limpiando buffer paciente {patient_id}: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
 def init_api_module(app):
     """Inicializar el módulo API con la aplicación Flask"""
-    logger.info("Inicializando módulo API de nodos con sistema de 50 muestras")
+    logger.info("Inicializando módulo API de nodos con sistema de 50 muestras y limpieza automática")
     logger.info("Módulo API de nodos inicializado correctamente")
 
 # Inicializar automáticamente cuando se importe
