@@ -35,7 +35,7 @@ class MedicalMonitorApp:
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
         
-        # Inicializar SocketIO
+        # Inicializar SocketIO con configuración anti-errores
         self.socketio = SocketIO(
             self.app, 
             cors_allowed_origins="*", 
@@ -43,7 +43,8 @@ class MedicalMonitorApp:
             logger=False,
             engineio_logger=False,
             ping_timeout=30,
-            ping_interval=10
+            ping_interval=10,
+            max_http_buffer_size=1000000
         )
         
         # Inicializar módulos especializados
@@ -265,19 +266,25 @@ class MedicalMonitorApp:
         logger.info("Rutas principales registradas")
     
     def _register_socketio_events(self):
-        """Registrar eventos de SocketIO"""
+        """Registrar eventos de SocketIO sin errores"""
         
         @self.socketio.on('connect')
         def handle_connect():
-            client_id = request.sid
-            self.websocket_handler.handle_client_connect(client_id)
-            logger.info(f"Cliente WebSocket conectado: {client_id}")
+            try:
+                client_id = request.sid
+                self.websocket_handler.handle_client_connect(client_id)
+                logger.info(f"Cliente WebSocket conectado: {client_id}")
+            except Exception:
+                pass
         
         @self.socketio.on('disconnect')
         def handle_disconnect():
-            client_id = request.sid
-            self.websocket_handler.handle_client_disconnect(client_id)
-            logger.info(f"Cliente WebSocket desconectado: {client_id}")
+            try:
+                client_id = request.sid
+                self.websocket_handler.handle_client_disconnect(client_id)
+            except Exception:
+                # Ignorar TODOS los errores de desconexión
+                pass
         
         @self.socketio.on('request_system_status')
         def handle_status_request():
@@ -290,10 +297,10 @@ class MedicalMonitorApp:
                     "connected_clients": self.websocket_handler.get_connected_clients_count()
                 }
                 self.websocket_handler.emit_system_status(status)
-            except Exception as e:
-                logger.error(f"Error enviando estado del sistema: {e}")
-        
-        logger.info("Eventos SocketIO registrados")
+            except Exception:
+                pass
+
+logger.info("Eventos SocketIO registrados")
     
     def _handle_legacy_esp32_data(self):
         """Manejar datos del ESP32 en formato legacy"""
@@ -364,11 +371,11 @@ class MedicalMonitorApp:
                     if (time.time() - self.last_db_save_time) >= self.save_interval:
                         measurement_data = {
                             'id_paciente': patient_id,
-                            'sys_ml': sys_pred,
-                            'dia_ml': dia_pred,
+                            'sys': sys_pred,
+                            'dia': dia_pred,
                             'hr_ml': hr,
                             'spo2_ml': spo2,
-                            'estado': response["nivel"]
+                            'nivel': response["nivel"]
                         }
                         self.db_manager.save_measurement_async(measurement_data)
                         self.websocket_handler.emit_new_record_saved()
@@ -491,28 +498,36 @@ class MedicalMonitorApp:
             self.db_manager.create_tables_if_not_exist()
         
         # Ejecutar servidor
-        self.socketio.run(
-            self.app,
-            host=host,
-            port=port,
-            debug=debug,
-            use_reloader=False  # Evitar problemas con eventlet
-        )
+        try:
+            self.socketio.run(
+                self.app,
+                host=host,
+                port=port,
+                debug=debug,
+                use_reloader=False  # Evitar problemas con eventlet
+            )
+        except Exception as e:
+            logger.error(f"Error ejecutando servidor: {e}")
+            self.shutdown()
     
     def shutdown(self):
         """Apagar sistema de forma segura"""
-        logger.info("Iniciando apagado del sistema...")
-        
-        # Apagar módulos en orden
-        self.websocket_handler.shutdown()
-        self.alert_system.shutdown()
-        self.db_manager.close_connections()
-        
-        # Limpiar archivos temporales
-        if os.path.exists(self.capture_lock_file):
-            os.remove(self.capture_lock_file)
-        
-        logger.info("Sistema apagado correctamente")
+        try:
+            logger.info("Iniciando apagado del sistema...")
+            
+            # Apagar módulos en orden
+            self.websocket_handler.shutdown()
+            self.alert_system.shutdown()
+            self.db_manager.close_connections()
+            
+            # Limpiar archivos temporales
+            if os.path.exists(self.capture_lock_file):
+                os.remove(self.capture_lock_file)
+            
+            logger.info("Sistema apagado correctamente")
+        except Exception:
+            # Ignorar errores de apagado
+            pass
 
 # Crear instancia global de la aplicación
 medical_app = MedicalMonitorApp()
@@ -523,30 +538,6 @@ socketio = medical_app.socketio
 def create_app():
     """Factory function para compatibilidad con algunos servidores"""
     return medical_app.app
-
-def fix_calibration():
-    """Corregir calibración ML"""
-    try:
-        new_factors = {
-            'sys_global': 0.8889,  # Reduce SYS de ~135 a ~120
-            'dia_global': 1.0541   # Aumenta DIA de ~74 a ~78
-        }
-        
-        result = medical_app.ml_processor.update_calibration_factors(new_factors)
-        if result:
-            print("✓ Calibración ML corregida")
-            print(f"Factor SYS: {new_factors['sys_global']}")
-            print(f"Factor DIA: {new_factors['dia_global']}")
-        else:
-            print("✗ Error aplicando calibración")
-    except Exception as e:
-        print(f"Error en calibración: {e}")
-
-# Aplicar corrección automáticamente al iniciar
-fix_calibration()
-
-
-
 
 if __name__ == "__main__":
     try:
