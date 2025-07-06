@@ -40,8 +40,8 @@ class MLProcessor:
         # Calibración CORREGIDA - VALORES AJUSTADOS
         self.calibration_enabled = True
         self.calibration_factors = {
-            'sys_global': 1.09,  # CAMBIO: Reducido de 1.25 a 1.10
-            'dia_global': 0.85,  # Mantener para reducir DIA
+            'sys_global': 0.85,  # CAMBIO: Reducido de 1.25 a 1.10
+            'dia_global': 0.89,  # Mantener para reducir DIA
         }
         
         # Inicializar modelos
