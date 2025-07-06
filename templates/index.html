@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+// Entrenamiento<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -135,7 +135,6 @@
         <p>HR ML: <strong id="hr">---</strong> bpm</p>
         <p>SpO2 ML: <strong id="spo2">---</strong> %</p>
         <p>Estado: <strong id="nivel">---</strong></p>
-        <p>Muestras: <strong id="muestras_count">---</strong></p>
     </div>
 
     <div class="container">
@@ -145,6 +144,7 @@
         <div id="training-subsection" class="training-subsection">
             <button id="toggleCaptureBtn" disabled>2. Iniciar Captura 📊</button>
             <span id="capture-status" style="font-weight: bold; margin-left: 10px;"></span>
+            <span id="muestras_count" style="font-weight: bold; margin-left: 10px; color: #007bff;">---</span>
             <div style="margin-top: 15px;">
                 <p><strong>Paso 3:</strong> Despues de detener la captura, ingrese los valores de referencia.</p>
                 <div class="form-group">
@@ -193,8 +193,6 @@
                 spo2: document.getElementById('spo2'),
                 nivel: document.getElementById('nivel'),
                 muestras_count: document.getElementById('muestras_count'),
-                
-                // Entrenamiento
                 authTrainingBtn: document.getElementById('authTrainingBtn'),
                 trainingSubsection: document.getElementById('training-subsection'),
                 toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
@@ -239,9 +237,6 @@
                         if (data.hr !== undefined) ui.hr.textContent = Math.round(data.hr);
                         if (data.spo2 !== undefined) ui.spo2.textContent = Math.round(data.spo2);
                         if (data.nivel !== undefined) ui.nivel.textContent = data.nivel;
-                        if (data.muestras_recolectadas !== undefined) {
-                            ui.muestras_count.textContent = data.muestras_recolectadas + "/50";
-                        }
                     });
 
                     socket.on('new_record_saved', () => {
@@ -251,7 +246,18 @@
                     
                     socket.on('capture_count_update', function(data) {
                         if (isCapturing) {
-                            ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`;
+                            ui.captureStatus.textContent = `Capturando...`;
+                            ui.muestras_count.textContent = `(${data.count} muestras) 📊`;
+                        }
+                    });
+                    
+                    // Actualizar contador de muestras desde datos del ESP32
+                    socket.on('update_data', function(data) {
+                        // ... código anterior ...
+                        
+                        // Actualizar contador de muestras durante entrenamiento
+                        if (trainingAuthorized && data.muestras_recolectadas !== undefined) {
+                            ui.muestras_count.textContent = data.muestras_recolectadas + "/50 📈";
                         }
                     });
                     
@@ -279,6 +285,13 @@
                 ui.diaRef.disabled = !canEnterReference;
                 ui.hrRef.disabled = !canEnterReference;
                 ui.saveSampleBtn.disabled = !canEnterReference;
+                
+                // Actualizar contador visual
+                if (!trainingAuthorized) {
+                    ui.muestras_count.textContent = '---';
+                } else if (!isCapturing && ui.muestras_count.textContent === '---') {
+                    ui.muestras_count.textContent = '0/50 📊';
+                }
                 
                 console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing, 'Puede ingresar refs:', canEnterReference);
             }
