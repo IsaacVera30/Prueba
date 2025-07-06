@@ -238,11 +238,29 @@
             // Event listeners para entrenamiento
             ui.authTrainingBtn.addEventListener('click', () => {
                 trainingAuthorized = !trainingAuthorized;
-                if (!trainingAuthorized && isCapturing) {
-                    isCapturing = false;
-                    fetch('/api/stop_capture', { method: 'POST' });
+                
+                if (trainingAuthorized) {
+                    // Iniciar entrenamiento nuevo
+                    fetch('/api/training/start', { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => {
+                            console.log('Entrenamiento iniciado:', data);
+                            if (data.success) {
+                                ui.captureStatus.textContent = 'Entrenamiento iniciado. Listo para capturar.';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error iniciando entrenamiento:', error);
+                            trainingAuthorized = false;
+                        });
+                } else {
+                    // Detener entrenamiento
+                    if (isCapturing) {
+                        isCapturing = false;
+                        fetch('/api/training/stop', { method: 'POST' });
+                    }
+                    ui.captureStatus.textContent = '';
                 }
-                ui.captureStatus.textContent = '';
                 updateTrainingUI();
             });
 
@@ -250,24 +268,25 @@
                 if (!trainingAuthorized) return;
                 
                 isCapturing = !isCapturing;
-                const endpoint = isCapturing ? '/api/start_capture' : '/api/stop_capture';
-                
-                ui.captureStatus.textContent = isCapturing ? 'Capturando... (0 muestras)' : 'Presione "Iniciar Captura"';
+                ui.captureStatus.textContent = isCapturing ? 'Capturando...' : 'Presione "Iniciar Captura"';
                 updateTrainingUI();
 
-                fetch(endpoint, { method: 'POST' })
-                    .then(res => res.json())
-                    .then(data => {
-                        console.log('Respuesta captura:', data);
-                        if (!isCapturing) {
-                            ui.captureStatus.textContent = `Captura Detenida. ${data.muestras_en_buffer || 0} muestras listas. Ingrese valores.`;
-                        }
-                        updateTrainingUI();
-                    })
-                    .catch(error => {
-                        console.error('Error en captura:', error);
-                        ui.captureStatus.textContent = 'Error en captura';
-                    });
+                if (!isCapturing) {
+                    // Detener captura
+                    fetch('/api/training/stop', { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => {
+                            console.log('Captura detenida:', data);
+                            if (data.success) {
+                                ui.captureStatus.textContent = `Captura Detenida. ${data.session_summary?.total_samples || 0} muestras listas. Ingrese valores.`;
+                            }
+                            updateTrainingUI();
+                        })
+                        .catch(error => {
+                            console.error('Error deteniendo captura:', error);
+                            ui.captureStatus.textContent = 'Error deteniendo captura';
+                        });
+                }
             });
 
             ui.saveSampleBtn.addEventListener('click', () => {
@@ -282,7 +301,7 @@
                     return;
                 }
                 
-                fetch('/api/save_training_data', {
+                fetch('/api/training/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(refData)
@@ -290,12 +309,391 @@
                 .then(res => res.json())
                 .then(data => {
                     console.log('Respuesta guardar:', data);
-                    if (data.status === "success") {
+                    if (data.success) {
                         alert("Muestra guardada y enviada a Google Drive exitosamente!");
                         ui.captureStatus.textContent = 'Listo para nueva captura.';
                         ui.sysRef.value = '';
                         ui.diaRef.value = '';
                         ui.hrRef.value = '';
+                        trainingAuthorized = false;
+                        updateTrainingUI();
+                    } else {
+                        alert("Error al guardar la muestra: " + (data.error || "Error desconocido"));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error guardando:', error);
+                    alert("Error de conexion al guardar");
+                });
+            });
+
+            // Funcion para actualizar tabla de mediciones
+            window.actualizarTablaMediciones = function() {
+                console.log('Actualizando tabla de mediciones...');
+                
+                fetch('/api/mediciones_recientes?limit=20')
+                    .then(res => {
+                        if (!res.ok) {
+                            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                        }
+                        return res.json();
+                    })
+                    .then(data => {
+                        console.log('Datos de mediciones:', data);
+                        const tbody = ui.medicionesTbody;
+                        tbody.innerHTML = '';
+                        
+                        if (data.success && data.mediciones && data.mediciones.length > 0) {
+                            data.mediciones.forEach(med => {
+                                let row = tbody.insertRow();
+                                row.insertCell().textContent = med.id || '---';
+                                row.insertCell().textContent = med.patient_id || med.id_paciente || '---';
+                                row.insertCell().textContent = med.sys ? parseFloat(med.sys).toFixed(1) : '---';
+                                row.insertCell().textContent = med.dia ? parseFloat(med.dia).toFixed(1) : '---';
+                                row.insertCell().textContent = med.hr ? Math.round(med.hr) : '---';
+                                row.insertCell().textContent = med.spo2 ? Math.round(med.spo2) : '---';
+                                row.insertCell().textContent = med.nivel || '---';
+                            });
+                        } else {
+                            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay datos disponibles.</td></tr>';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error cargando mediciones:', error);
+                        ui.medicionesTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Error cargando datos: ' + error.message + '</td></tr>';
+                    });
+            };
+
+            // Inicializar aplicacion
+            console.log('Inicializando aplicacion...');
+            updateTrainingUI();
+            initializeSocket();
+            actualizarTablaMediciones();
+            
+            // Auto-actualizar tabla cada 30 segundos
+            setInterval(actualizarTablaMediciones, 30000);
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Monitoreo de Salud</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+            padding: 20px; 
+            background-color: #f7f7f7; 
+        }
+        h1, h2 { 
+            color: #333; 
+            border-bottom: 2px solid #eee; 
+            padding-bottom: 10px;
+        }
+        .container { 
+            background-color: white; 
+            border: 1px solid #e0e0e0; 
+            padding: 15px 20px; 
+            margin-bottom: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+        }
+        p { 
+            font-size: 1.1em; 
+            color: #555; 
+            line-height: 1.6; 
+        }
+        strong { 
+            color: #000; 
+            font-weight: 600; 
+            float: right; 
+        }
+        button { 
+            padding: 10px 15px; 
+            border-radius: 5px; 
+            border: 1px solid #ccc; 
+            color: #333; 
+            background-color: #fff; 
+            cursor: pointer; 
+            font-size: 1em; 
+            margin-right: 10px; 
+            margin-top: 5px; 
+        }
+        button:hover:not(:disabled) { 
+            background-color: #e9ecef; 
+        }
+        button:disabled { 
+            background-color: #f8f9fa; 
+            color: #6c757d; 
+            cursor: not-allowed; 
+        }
+        input[type="number"] { 
+            padding: 8px; 
+            border-radius: 5px; 
+            border: 1px solid #ccc; 
+            margin-left: 5px; 
+            width: 80px; 
+        }
+        input:disabled { 
+            background-color: #e9ecef; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px;
+        }
+        th, td { 
+            border: 1px solid #ddd; 
+            padding: 12px; 
+            text-align: left; 
+        }
+        th { 
+            background-color: #f8f9fa; 
+        }
+        .training-subsection { 
+            display: none; 
+            margin-top: 15px; 
+            border-top: 1px solid #eee; 
+            padding-top: 15px; 
+        }
+        .form-group > * { 
+            margin-right: 15px; 
+        }
+    </style>
+</head>
+<body>
+    <h1>Panel de Monitoreo de Salud</h1>
+
+    <div class="container">
+        <h2>Lecturas del Sensor</h2>
+        <p>IR: <strong id="ir">---</strong></p>
+        <p>RED: <strong id="red">---</strong></p>
+    </div>
+
+    <div class="container">
+        <h2>Prediccion ML</h2>
+        <p>SYS ML: <strong id="sys">---</strong> mmHg</p>
+        <p>DIA ML: <strong id="dia">---</strong> mmHg</p>
+        <p>HR ML: <strong id="hr">---</strong> bpm</p>
+        <p>SpO2 ML: <strong id="spo2">---</strong> %</p>
+        <p>Estado: <strong id="nivel">---</strong></p>
+    </div>
+
+    <div class="container">
+        <h2>Entrenamiento ML</h2>
+        <p>Este modo permite capturar un segmento de datos del sensor para generar una nueva fila de entrenamiento, asociandola a una medicion de referencia de un tensiometro real.</p>
+        <button id="authTrainingBtn">1. Autorizar Modo Entrenamiento</button>
+        <div id="training-subsection" class="training-subsection">
+            <button id="toggleCaptureBtn" disabled>2. Iniciar Captura</button>
+            <span id="capture-status" style="font-weight: bold; margin-left: 10px;"></span>
+            <div style="margin-top: 15px;">
+                <p><strong>Paso 3:</strong> Despues de detener la captura, ingrese los valores de referencia.</p>
+                <div class="form-group">
+                    <label>SYS Referencia: <input type="number" id="sysRef" disabled></label>
+                    <label>DIA Referencia: <input type="number" id="diaRef" disabled></label>
+                    <label>HR Referencia: <input type="number" id="hrRef" disabled></label>
+                </div>
+            </div>
+            <button id="saveSampleBtn" style="margin-top: 15px; background-color: #28a745; color: white;" disabled>4. Guardar Registro y Enviar a Drive</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Ultimos 20 datos registrados</h2>
+        <button onclick="actualizarTablaMediciones()" style="margin-bottom: 10px;">Actualizar Tabla</button>
+        <table id="medicionesTable">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>PACIENTE ID</th>
+                    <th>SYS ML</th>
+                    <th>DIA ML</th>
+                    <th>HR ML</th>
+                    <th>SpO2 ML</th>
+                    <th>Nivel</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="7" style="text-align:center;">Cargando...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ui = {
+                // Lecturas del sensor
+                ir: document.getElementById('ir'),
+                red: document.getElementById('red'),
+                
+                // Prediccion ML
+                sys: document.getElementById('sys'),
+                dia: document.getElementById('dia'),
+                hr: document.getElementById('hr'),
+                spo2: document.getElementById('spo2'),
+                nivel: document.getElementById('nivel'),
+                
+                // Entrenamiento
+                authTrainingBtn: document.getElementById('authTrainingBtn'),
+                trainingSubsection: document.getElementById('training-subsection'),
+                toggleCaptureBtn: document.getElementById('toggleCaptureBtn'),
+                saveSampleBtn: document.getElementById('saveSampleBtn'),
+                captureStatus: document.getElementById('capture-status'),
+                sysRef: document.getElementById('sysRef'),
+                diaRef: document.getElementById('diaRef'),
+                hrRef: document.getElementById('hrRef'),
+                
+                // Tabla
+                medicionesTbody: document.getElementById('medicionesTable').querySelector('tbody')
+            };
+
+            let trainingAuthorized = false;
+            let isCapturing = false;
+            let socket;
+
+            // Inicializar Socket.IO
+            function initializeSocket() {
+                try {
+                    socket = io();
+                    
+                    socket.on('connect', () => {
+                        console.log('Conectado al servidor Socket.IO');
+                    });
+                    
+                    socket.on('disconnect', () => {
+                        console.log('Desconectado del servidor Socket.IO');
+                    });
+
+                    // Evento principal para actualizacion de datos
+                    socket.on('update_data', function(data) {
+                        console.log('Datos recibidos:', data);
+                        
+                        // Actualizar valores del sensor
+                        if (data.ir !== undefined) ui.ir.textContent = data.ir;
+                        if (data.red !== undefined) ui.red.textContent = data.red;
+                        
+                        // Actualizar predicciones ML
+                        if (data.sys !== undefined) ui.sys.textContent = parseFloat(data.sys).toFixed(1);
+                        if (data.dia !== undefined) ui.dia.textContent = parseFloat(data.dia).toFixed(1);
+                        if (data.hr !== undefined) ui.hr.textContent = Math.round(data.hr);
+                        if (data.spo2 !== undefined) ui.spo2.textContent = Math.round(data.spo2);
+                        if (data.nivel !== undefined) ui.nivel.textContent = data.nivel;
+                    });
+
+                    socket.on('new_record_saved', () => {
+                        console.log('Nuevo registro guardado');
+                        actualizarTablaMediciones();
+                    });
+                    
+                    socket.on('capture_count_update', function(data) {
+                        if (isCapturing) {
+                            ui.captureStatus.textContent = `Capturando... (${data.count} muestras)`;
+                        }
+                    });
+                    
+                } catch (error) {
+                    console.error('Error inicializando Socket.IO:', error);
+                }
+            }
+
+            function updateTrainingUI() {
+                ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
+                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento' : 'Autorizar Modo Entrenamiento';
+                ui.toggleCaptureBtn.disabled = !trainingAuthorized;
+                ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura' : '2. Iniciar Captura';
+                
+                const canEnterReference = !isCapturing && trainingAuthorized && ui.captureStatus.textContent.includes('Detenida');
+                ui.sysRef.disabled = !canEnterReference;
+                ui.diaRef.disabled = !canEnterReference;
+                ui.hrRef.disabled = !canEnterReference;
+                ui.saveSampleBtn.disabled = !canEnterReference;
+            }
+
+            // Event listeners para entrenamiento
+            ui.authTrainingBtn.addEventListener('click', () => {
+                trainingAuthorized = !trainingAuthorized;
+                
+                if (trainingAuthorized) {
+                    // Iniciar entrenamiento nuevo
+                    fetch('/api/training/start', { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => {
+                            console.log('Entrenamiento iniciado:', data);
+                            if (data.success) {
+                                ui.captureStatus.textContent = 'Entrenamiento iniciado. Listo para capturar.';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error iniciando entrenamiento:', error);
+                            trainingAuthorized = false;
+                        });
+                } else {
+                    // Detener entrenamiento
+                    if (isCapturing) {
+                        isCapturing = false;
+                        fetch('/api/training/stop', { method: 'POST' });
+                    }
+                    ui.captureStatus.textContent = '';
+                }
+                updateTrainingUI();
+            });
+
+            ui.toggleCaptureBtn.addEventListener('click', () => {
+                if (!trainingAuthorized) return;
+                
+                isCapturing = !isCapturing;
+                ui.captureStatus.textContent = isCapturing ? 'Capturando...' : 'Presione "Iniciar Captura"';
+                updateTrainingUI();
+
+                if (!isCapturing) {
+                    // Detener captura
+                    fetch('/api/training/stop', { method: 'POST' })
+                        .then(res => res.json())
+                        .then(data => {
+                            console.log('Captura detenida:', data);
+                            if (data.success) {
+                                ui.captureStatus.textContent = `Captura Detenida. ${data.session_summary?.total_samples || 0} muestras listas. Ingrese valores.`;
+                            }
+                            updateTrainingUI();
+                        })
+                        .catch(error => {
+                            console.error('Error deteniendo captura:', error);
+                            ui.captureStatus.textContent = 'Error deteniendo captura';
+                        });
+                }
+            });
+
+            ui.saveSampleBtn.addEventListener('click', () => {
+                const refData = { 
+                    sys_ref: ui.sysRef.value, 
+                    dia_ref: ui.diaRef.value, 
+                    hr_ref: ui.hrRef.value 
+                };
+                
+                if (!refData.sys_ref || !refData.dia_ref || !refData.hr_ref) {
+                    alert("Por favor, ingrese todos los valores de referencia.");
+                    return;
+                }
+                
+                fetch('/api/training/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(refData)
+                })
+                .then(res => res.json())
+                .then(data => {
+                    console.log('Respuesta guardar:', data);
+                    if (data.success) {
+                        alert("Muestra guardada y enviada a Google Drive exitosamente!");
+                        ui.captureStatus.textContent = 'Listo para nueva captura.';
+                        ui.sysRef.value = '';
+                        ui.diaRef.value = '';
+                        ui.hrRef.value = '';
+                        trainingAuthorized = false;
+                        updateTrainingUI();
                     } else {
                         alert("Error al guardar la muestra: " + (data.error || "Error desconocido"));
                     }
