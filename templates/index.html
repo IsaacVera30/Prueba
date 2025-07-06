@@ -223,16 +223,26 @@
             }
 
             function updateTrainingUI() {
+                // Mostrar/ocultar subsección
                 ui.trainingSubsection.style.display = trainingAuthorized ? 'block' : 'none';
-                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento' : 'Autorizar Modo Entrenamiento';
+                
+                // Texto del botón principal
+                ui.authTrainingBtn.textContent = trainingAuthorized ? 'Desactivar Modo Entrenamiento' : '1. Autorizar Modo Entrenamiento';
+                
+                // Estado del botón de captura
                 ui.toggleCaptureBtn.disabled = !trainingAuthorized;
                 ui.toggleCaptureBtn.textContent = isCapturing ? '2. Detener Captura' : '2. Iniciar Captura';
                 
-                const canEnterReference = !isCapturing && trainingAuthorized && ui.captureStatus.textContent.includes('Detenida');
+                // Estado de los campos de referencia
+                const canEnterReference = !isCapturing && trainingAuthorized && 
+                    (ui.captureStatus.textContent.includes('Detenida') || ui.captureStatus.textContent.includes('listas'));
+                
                 ui.sysRef.disabled = !canEnterReference;
                 ui.diaRef.disabled = !canEnterReference;
                 ui.hrRef.disabled = !canEnterReference;
                 ui.saveSampleBtn.disabled = !canEnterReference;
+                
+                console.log('UI actualizada - Autorizado:', trainingAuthorized, 'Capturando:', isCapturing, 'Puede ingresar refs:', canEnterReference);
             }
 
             // Event listeners para entrenamiento
@@ -240,18 +250,27 @@
                 trainingAuthorized = !trainingAuthorized;
                 
                 if (trainingAuthorized) {
+                    ui.captureStatus.textContent = 'Autorizando entrenamiento...';
+                    updateTrainingUI();
+                    
                     // Iniciar entrenamiento nuevo
                     fetch('/api/training/start', { method: 'POST' })
                         .then(res => res.json())
                         .then(data => {
                             console.log('Entrenamiento iniciado:', data);
                             if (data.success) {
-                                ui.captureStatus.textContent = 'Entrenamiento iniciado. Listo para capturar.';
+                                ui.captureStatus.textContent = 'Entrenamiento autorizado. Presione "Iniciar Captura".';
+                            } else {
+                                ui.captureStatus.textContent = 'Error: ' + (data.error || 'Error desconocido');
+                                trainingAuthorized = false;
                             }
+                            updateTrainingUI();
                         })
                         .catch(error => {
                             console.error('Error iniciando entrenamiento:', error);
+                            ui.captureStatus.textContent = 'Error de conexión al autorizar';
                             trainingAuthorized = false;
+                            updateTrainingUI();
                         });
                 } else {
                     // Detener entrenamiento
@@ -260,31 +279,49 @@
                         fetch('/api/training/stop', { method: 'POST' });
                     }
                     ui.captureStatus.textContent = '';
+                    updateTrainingUI();
                 }
-                updateTrainingUI();
             });
 
             ui.toggleCaptureBtn.addEventListener('click', () => {
-                if (!trainingAuthorized) return;
+                if (!trainingAuthorized) {
+                    console.log('Entrenamiento no autorizado');
+                    return;
+                }
                 
-                isCapturing = !isCapturing;
-                ui.captureStatus.textContent = isCapturing ? 'Capturando...' : 'Presione "Iniciar Captura"';
-                updateTrainingUI();
-
                 if (!isCapturing) {
-                    // Detener captura
+                    // INICIAR captura
+                    isCapturing = true;
+                    ui.captureStatus.textContent = 'Iniciando captura...';
+                    updateTrainingUI();
+                    
+                    console.log('Iniciando captura de entrenamiento');
+                    // No hacer fetch aquí, solo cambiar estado visual
+                    ui.captureStatus.textContent = 'Capturando datos... Mantenga dedo estable.';
+                    
+                } else {
+                    // DETENER captura
+                    isCapturing = false;
+                    ui.captureStatus.textContent = 'Deteniendo captura...';
+                    updateTrainingUI();
+                    
+                    console.log('Deteniendo captura de entrenamiento');
+                    
                     fetch('/api/training/stop', { method: 'POST' })
                         .then(res => res.json())
                         .then(data => {
                             console.log('Captura detenida:', data);
                             if (data.success) {
                                 ui.captureStatus.textContent = `Captura Detenida. ${data.session_summary?.total_samples || 0} muestras listas. Ingrese valores.`;
+                            } else {
+                                ui.captureStatus.textContent = 'Error deteniendo: ' + (data.error || 'Error desconocido');
                             }
                             updateTrainingUI();
                         })
                         .catch(error => {
                             console.error('Error deteniendo captura:', error);
-                            ui.captureStatus.textContent = 'Error deteniendo captura';
+                            ui.captureStatus.textContent = 'Error de conexión al detener';
+                            updateTrainingUI();
                         });
                 }
             });
