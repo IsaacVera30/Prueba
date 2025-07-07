@@ -88,10 +88,9 @@ class DataCollector:
     def _test_drive_connection(self):
         """Probar conexión con Google Drive - QUERY CORREGIDO"""
         try:
-            # CORREGIDO: Verificar primero que podemos listar archivos básicos
+            # Test básico: listar algunos archivos
             self.logger.info("Probando conexión básica con Google Drive...")
             
-            # Test básico: listar algunos archivos
             response = self.drive_service.files().list(
                 pageSize=1,
                 fields='files(id, name)'
@@ -99,7 +98,7 @@ class DataCollector:
             
             self.logger.info("Conexión básica con Google Drive exitosa")
             
-            # CORREGIDO: Ahora verificar la carpeta específica usando el ID correcto
+            # Verificar la carpeta específica usando el ID correcto
             self.logger.info(f"Verificando acceso a carpeta: {self.folder_id}")
             
             try:
@@ -255,10 +254,10 @@ class DataCollector:
         return {"success": False, "error": f"Falló después de {max_retries} intentos"}
     
     def _save_to_drive(self, row_data):
-        """Guardar datos en Google Drive - CORREGIDO"""
+        """Guardar datos en Google Drive - CORREGIDO PARA NO SALTAR FILAS"""
         try:
-            # CORREGIDO: Buscar archivo existente con query correcto
-            query = f"name='{self.csv_filename}' and '{self.folder_id}' in parents and trashed=false"
+            # CORREGIDO: Query con espacios
+            query = f"name = '{self.csv_filename}' and '{self.folder_id}' in parents and trashed = false"
             self.logger.debug(f"Buscando archivo con query: {query}")
             
             response = self.drive_service.files().list(
@@ -271,7 +270,6 @@ class DataCollector:
             self.logger.info(f"Archivos encontrados: {len(files)}")
             
             # Preparar contenido CSV
-            string_io = io.StringIO()
             fieldnames = [
                 'hr_promedio_sensor', 'spo2_promedio_sensor',
                 'ir_mean_filtrado', 'red_mean_filtrado',
@@ -281,58 +279,80 @@ class DataCollector:
             ]
             
             if files:
-                # Archivo existe - descargar y añadir nueva fila
+                # Archivo existe - CORREGIDO PARA NO SALTAR FILAS
                 file_id = files[0]['id']
                 self.logger.info(f"Actualizando archivo existente: {files[0]['name']} (ID: {file_id})")
                 
                 try:
                     # Descargar contenido existente
                     existing_file = self.drive_service.files().get_media(fileId=file_id).execute()
-                    existing_content = existing_file.decode('utf-8')
+                    existing_content = existing_file.decode('utf-8').strip()  # CAMBIO: strip() para remover espacios
                     
-                    # Escribir contenido existente
+                    self.logger.debug(f"Contenido existente (últimos 100 chars): {existing_content[-100:]}")
+                    
+                    # CAMBIO: Crear string_io con el contenido existente
+                    string_io = io.StringIO()
                     string_io.write(existing_content)
-                    if not existing_content.strip().endswith('\n'):
+                    
+                    # CAMBIO: Solo añadir \n si el contenido no termina en nueva línea
+                    if not existing_content.endswith('\n'):
                         string_io.write('\n')
                     
-                    # Posicionarse al final y añadir nueva fila
-                    string_io.seek(0, io.SEEK_END)
-                    csv_writer = csv.writer(string_io)
+                    # CAMBIO: Crear CSV writer con terminador explícito
+                    csv_writer = csv.writer(string_io, lineterminator='\n')
                     
                     # Preparar fila en el orden correcto
                     row_values = [row_data.get(field, '') for field in fieldnames]
                     csv_writer.writerow(row_values)
                     
+                    # CAMBIO: Obtener contenido final sin \n extra
+                    final_content = string_io.getvalue()
+                    
+                    self.logger.debug(f"Contenido final (últimos 200 chars): {final_content[-200:]}")
+                    
                     # Eliminar archivo anterior
                     self.drive_service.files().delete(fileId=file_id).execute()
                     self.logger.debug("Archivo anterior eliminado")
+                    
+                    # Crear nuevo archivo con contenido corregido
+                    media = MediaIoBaseUpload(
+                        io.BytesIO(final_content.encode('utf-8')),
+                        mimetype="text/csv",
+                        resumable=True
+                    )
                     
                 except HttpError as e:
                     if e.resp.status == 404:
                         # Archivo no encontrado, crear nuevo
                         self.logger.warning("Archivo no encontrado, creando nuevo")
                         string_io = io.StringIO()
-                        writer = csv.DictWriter(string_io, fieldnames=fieldnames)
+                        writer = csv.DictWriter(string_io, fieldnames=fieldnames, lineterminator='\n')
                         writer.writeheader()
                         writer.writerow(row_data)
+                        
+                        media = MediaIoBaseUpload(
+                            io.BytesIO(string_io.getvalue().encode('utf-8')),
+                            mimetype="text/csv",
+                            resumable=True
+                        )
                     else:
                         raise
                         
             else:
                 # Archivo nuevo - crear con header
                 self.logger.info("Creando nuevo archivo CSV")
-                writer = csv.DictWriter(string_io, fieldnames=fieldnames)
+                string_io = io.StringIO()
+                writer = csv.DictWriter(string_io, fieldnames=fieldnames, lineterminator='\n')
                 writer.writeheader()
                 writer.writerow(row_data)
+                
+                media = MediaIoBaseUpload(
+                    io.BytesIO(string_io.getvalue().encode('utf-8')),
+                    mimetype="text/csv",
+                    resumable=True
+                )
             
             # Subir archivo a Drive
-            csv_content = string_io.getvalue()
-            media = MediaIoBaseUpload(
-                io.BytesIO(csv_content.encode('utf-8')),
-                mimetype="text/csv",
-                resumable=True
-            )
-            
             file_metadata = {
                 "name": self.csv_filename,
                 "parents": [self.folder_id]
@@ -385,7 +405,7 @@ class DataCollector:
             return {"success": False, "error": "Drive no conectado"}
         
         try:
-            query = f"name='{self.csv_filename}' and '{self.folder_id}' in parents and trashed=false"
+            query = f"name = '{self.csv_filename}' and '{self.folder_id}' in parents and trashed = false"
             response = self.drive_service.files().list(
                 q=query, 
                 fields='files(id, name, size, modifiedTime, createdTime)',
