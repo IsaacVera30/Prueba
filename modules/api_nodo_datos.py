@@ -1,5 +1,5 @@
 # modules/api_nodo_datos.py
-# API especializada para recibir datos del ESP32 - CORREGIDA PARA BD
+# API especializada para recibir datos del ESP32 - BUFFERS SEPARADOS
 
 from flask import Blueprint, request, jsonify
 import time
@@ -324,7 +324,8 @@ def classify_pressure_level(sys_pressure, dia_pressure):
 @api_nodo_bp.route('/raw_data', methods=['POST'])
 def receive_raw_data():
     """
-    Endpoint principal para recibir datos del ESP32 - CORREGIDO PARA BD
+    Endpoint principal para recibir datos del ESP32
+    Sistema con buffers separados para ML y entrenamiento
     """
     try:
         data = request.get_json()
@@ -431,52 +432,34 @@ def receive_raw_data():
                                 
                                 logger.info(f"Predicción ML exitosa - SYS:{sys_pred} DIA:{dia_pred}")
                                 
-                                # GUARDAR EN BD CON MANEJO ROBUSTO
-                                if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
-                                    try:
-                                        measurement_data = {
-                                            'id_paciente': patient_id,
-                                            'sys': float(sys_pred),
-                                            'dia': float(dia_pred),
-                                            'hr_ml': float(hr_final),
-                                            'spo2_ml': float(ml_data['spo2_calculated']),
-                                            'nivel': str(response["nivel"])
-                                        }
-                                        
-                                        # Intentar guardar de forma asíncrona
-                                        save_success = api_nodo_bp.db_manager.save_measurement_async(measurement_data)
-                                        if save_success:
-                                            logger.info(f"Medición guardada en BD exitosamente")
-                                        else:
-                                            logger.warning(f"No se pudo guardar medición en BD")
-                                            
-                                    except Exception as db_error:
-                                        logger.error(f"Error específico guardando en BD: {db_error}")
-                                        # No fallar el endpoint por error de BD
-                                else:
-                                    logger.warning("BD no disponible - medición no guardada")
+                                # Guardar en BD
+                                if hasattr(api_nodo_bp, 'db_manager'):
+                                    measurement_data = {
+                                        'id_paciente': patient_id,
+                                        'sys': float(sys_pred),
+                                        'dia': float(dia_pred),
+                                        'hr_ml': float(hr_final),
+                                        'spo2_ml': float(ml_data['spo2_calculated']),
+                                        'nivel': str(response["nivel"])
+                                    }
+                                    api_nodo_bp.db_manager._save_measurement_sync(measurement_data)
+                                    logger.info(f"Medición guardada en BD")
                                 
                                 # Verificar alertas
                                 if hasattr(api_nodo_bp, 'alert_system'):
-                                    try:
-                                        alert_data = {
-                                            'patient_id': patient_id,
-                                            'nivel': response["nivel"],
-                                            'sys': sys_pred,
-                                            'dia': dia_pred,
-                                            'hr': hr_final,
-                                            'spo2': ml_data['spo2_calculated']
-                                        }
-                                        api_nodo_bp.alert_system.check_and_send_alert(alert_data)
-                                    except Exception as alert_error:
-                                        logger.error(f"Error procesando alerta: {alert_error}")
+                                    alert_data = {
+                                        'patient_id': patient_id,
+                                        'nivel': response["nivel"],
+                                        'sys': sys_pred,
+                                        'dia': dia_pred,
+                                        'hr': hr_final,
+                                        'spo2': ml_data['spo2_calculated']
+                                    }
+                                    api_nodo_bp.alert_system.check_and_send_alert(alert_data)
                                 
                                 # Notificar vía WebSocket
                                 if hasattr(api_nodo_bp, 'websocket_handler'):
-                                    try:
-                                        api_nodo_bp.websocket_handler.emit_new_record_saved()
-                                    except Exception as ws_error:
-                                        logger.error(f"Error WebSocket: {ws_error}")
+                                    api_nodo_bp.websocket_handler.emit_new_record_saved()
                             else:
                                 logger.error("Predicciones ML inválidas")
                                 response["nivel"] = "Error predicción"
@@ -498,11 +481,8 @@ def receive_raw_data():
             
             # Notificar vía WebSocket
             if hasattr(api_nodo_bp, 'websocket_handler'):
-                try:
-                    update_data = {**data, **response}
-                    api_nodo_bp.websocket_handler.emit_update(update_data)
-                except Exception as ws_error:
-                    logger.error(f"Error WebSocket update: {ws_error}")
+                update_data = {**data, **response}
+                api_nodo_bp.websocket_handler.emit_update(update_data)
 
             return jsonify(response)
 
@@ -514,8 +494,6 @@ def receive_raw_data():
             "muestras_recolectadas": 0,
             "calidad": "error"
         }), 500
-
-# Resto de endpoints permanecen igual...
 
 @api_nodo_bp.route('/training/start', methods=['POST'])
 def start_training_collection():
@@ -602,6 +580,82 @@ def save_training_data():
     except Exception as e:
         logger.error(f"Error guardando entrenamiento: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@api_nodo_bp.route('/training/status', methods=['GET'])
+def get_training_status():
+    """Obtener estado del entrenamiento"""
+    try:
+        status = training_buffer.get_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error obteniendo estado entrenamiento: {e}")
+        return jsonify({"active": False, "error": str(e)}), 500
+
+@api_nodo_bp.route('/patient_status/<int:patient_id>', methods=['GET'])
+def get_patient_status(patient_id):
+    """Obtener estado actual del buffer ML de un paciente"""
+    try:
+        sample_count = ml_sample_buffer.get_sample_count(patient_id)
+        has_enough = ml_sample_buffer.has_enough_samples(patient_id)
+        
+        status = {
+            "patient_id": patient_id,
+            "sample_count": sample_count,
+            "samples_needed": 50,
+            "ready_for_ml": has_enough,
+            "progress_percentage": (sample_count / 50) * 100,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo estado del paciente {patient_id}: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
+@api_nodo_bp.route('/buffer_status', methods=['GET'])
+def get_buffer_status():
+    """Obtener estado completo de todos los buffers"""
+    try:
+        # Estado buffers ML
+        ml_patients = {}
+        for patient_id, buffer in ml_sample_buffer.patient_buffers.items():
+            ml_patients[patient_id] = {
+                "sample_count": len(buffer),
+                "progress_percentage": (len(buffer) / 50) * 100,
+                "ready_for_ml": len(buffer) >= 50
+            }
+        
+        # Estado buffer entrenamiento
+        training_status = training_buffer.get_status()
+        
+        return jsonify({
+            "ml_buffers": {
+                "active_patients": len(ml_patients),
+                "patient_buffers": ml_patients,
+                "target_samples": 50
+            },
+            "training_buffer": training_status,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error obteniendo estado de buffers: {e}")
+        return jsonify({"error": "Error interno"}), 500
+
+@api_nodo_bp.route('/clear_buffer/<int:patient_id>', methods=['POST'])
+def clear_patient_buffer_endpoint(patient_id):
+    """Endpoint para limpiar manualmente el buffer ML de un paciente"""
+    try:
+        ml_sample_buffer.clear_patient_buffer(patient_id)
+        logger.info(f"Buffer ML limpiado manualmente para paciente {patient_id}")
+        return jsonify({
+            "success": True,
+            "message": f"Buffer ML del paciente {patient_id} limpiado",
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error limpiando buffer paciente {patient_id}: {e}")
+        return jsonify({"error": "Error interno"}), 500
 
 def init_api_module(app):
     """Inicializar el módulo API con la aplicación Flask"""
