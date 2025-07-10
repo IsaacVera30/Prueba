@@ -37,7 +37,7 @@ class MLProcessor:
         # Lock para thread safety
         self.prediction_lock = threading.Lock()
         
-        # Calibración CORREGIDA - VALORES AJUSTADOS
+        # Calibración 
         self.calibration_enabled = True
         self.calibration_factors = {
             'sys_global': 0.87,  # CAMBIO: Reducido de 1.25 a 1.10
