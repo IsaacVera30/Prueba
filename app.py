@@ -1,6 +1,3 @@
-# app.py - VERSION MODULAR COMPLETA CON ENTRENAMIENTO SEPARADO
-# Aplicación principal usando arquitectura modular
-
 import eventlet
 eventlet.monkey_patch()
 
@@ -14,13 +11,11 @@ import threading
 import sys
 import warnings
 
-# Suprimir warnings y errores de eventlet/socketio
 warnings.filterwarnings("ignore")
 logging.getLogger('socketio').setLevel(logging.WARNING)
 logging.getLogger('engineio').setLevel(logging.WARNING) 
 logging.getLogger('eventlet').setLevel(logging.WARNING)
 
-# Importar módulos especializados
 from modules.ml_processor import MLProcessor
 from modules.database_manager import DatabaseManager
 from modules.alert_system import AlertSystem
@@ -28,7 +23,6 @@ from modules.data_collector import DataCollector
 from modules.websocket_handler import WebSocketHandler
 from modules.api_nodo_datos import api_nodo_bp
 
-# Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='[%(name)s] %(asctime)s - %(levelname)s - %(message)s',
@@ -37,13 +31,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class MedicalMonitorApp:
-    """Aplicación principal del sistema de monitoreo médico"""
     
     def __init__(self):
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
         
-        # Inicializar SocketIO con configuración anti-errores
         self.socketio = SocketIO(
             self.app, 
             cors_allowed_origins="*", 
@@ -59,14 +51,12 @@ class MedicalMonitorApp:
             cookie=None
         )
         
-        # Inicializar módulos especializados
         self.ml_processor = MLProcessor()
         self.db_manager = DatabaseManager()
         self.alert_system = AlertSystem()
         self.data_collector = DataCollector()
         self.websocket_handler = WebSocketHandler(self.socketio)
         
-        # Variables de estado
         self.system_start_time = time.time()
         self.last_db_save_time = 0
         self.save_interval = 5 
@@ -83,30 +73,23 @@ class MedicalMonitorApp:
         api_nodo_bp.websocket_handler = self.websocket_handler
         api_nodo_bp.data_collector = self.data_collector
         
-        # Registrar blueprint de API
         self.app.register_blueprint(api_nodo_bp, url_prefix='/api')
-        
-        # Configurar WebSocket handler
         self.websocket_handler.register_event_handlers()
         
         logger.info("Conexiones entre módulos configuradas")
     
     def _register_routes(self):
-        """Registrar rutas de la aplicación"""
         
         @self.app.route("/")
         def home():
-            """Página principal del panel de control"""
             return render_template("index.html")
                
         @self.app.route("/api/training/start", methods=["POST"])
         def start_training_session():
-            """Iniciar sesión de entrenamiento usando API module"""
             try:
                 data = request.get_json() or {}
                 patient_id = data.get('patient_id', 1)
                 
-                # Usar directamente el training buffer del API module
                 from modules.api_nodo_datos import training_buffer
                 training_buffer.start_collection(patient_id)
                 
@@ -126,7 +109,6 @@ class MedicalMonitorApp:
 
         @self.app.route("/api/training/stop", methods=["POST"])
         def stop_training_session():
-            """Detener sesión de entrenamiento"""
             try:
                 from modules.api_nodo_datos import training_buffer
                 samples_collected = training_buffer.stop_collection()
@@ -147,7 +129,6 @@ class MedicalMonitorApp:
 
         @self.app.route("/api/training/save", methods=["POST"])
         def save_training_data():
-            """Guardar datos de entrenamiento con valores de referencia"""
             try:
                 ref_data = request.get_json()
                 if not ref_data:
@@ -162,12 +143,10 @@ class MedicalMonitorApp:
                 if status['sample_count'] == 0:
                     return jsonify({"success": False, "error": "No hay muestras para guardar"}), 400
                 
-                # Obtener muestras procesadas
                 processed_data = training_buffer.get_samples_for_saving(status['current_patient'])
                 if not processed_data:
                     return jsonify({"success": False, "error": "Error procesando muestras"}), 400
                 
-                # Preparar datos finales
                 final_data = {
                     **processed_data,
                     'sys_ref': float(ref_data['sys_ref']),
@@ -176,11 +155,9 @@ class MedicalMonitorApp:
                     'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
                 
-                # Guardar usando data collector
                 result = self.data_collector.save_training_sample(final_data)
                 
                 if result.get('success'):
-                    # Limpiar sesión después de guardar exitosamente
                     training_buffer.clear_current_session()
                     
                     logger.info("Datos de entrenamiento guardados exitosamente")
@@ -199,7 +176,6 @@ class MedicalMonitorApp:
 
         @self.app.route("/api/training/status", methods=["GET"])
         def get_training_status():
-            """Obtener estado del entrenamiento"""
             try:
                 from modules.api_nodo_datos import training_buffer
                 status = training_buffer.get_status()
@@ -207,18 +183,14 @@ class MedicalMonitorApp:
             except Exception as e:
                 logger.error(f"Error obteniendo estado entrenamiento: {e}")
                 return jsonify({"active": False, "error": str(e)}), 500
-        
 
         @self.app.route("/api/data", methods=["POST"])
         def recibir_datos():
-            """Endpoint legacy para compatibilidad con ESP32 anterior"""
             return self._handle_legacy_esp32_data()
         
         @self.app.route("/api/start_capture", methods=["POST"])
         def start_capture():
-            """Iniciar captura de datos para entrenamiento - LEGACY"""
             try:
-                # Redirigir al nuevo sistema
                 from modules.api_nodo_datos import training_buffer
                 training_buffer.start_collection(1)
                 
@@ -237,7 +209,6 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/stop_capture", methods=["POST"])
         def stop_capture():
-            """Detener captura de datos - LEGACY"""
             try:
                 from modules.api_nodo_datos import training_buffer
                 samples_collected = training_buffer.stop_collection()
@@ -260,7 +231,6 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/save_training_data", methods=["POST"])
         def save_training_data_legacy():
-            """Guardar datos de entrenamiento - LEGACY"""
             try:
                 ref_data = request.get_json()
                 if not ref_data:
@@ -272,12 +242,10 @@ class MedicalMonitorApp:
                 if status['sample_count'] == 0:
                     return jsonify({"error": "No hay datos en el buffer"}), 400
                 
-                # Obtener muestras procesadas
                 processed_data = training_buffer.get_samples_for_saving(status['current_patient'])
                 if not processed_data:
                     return jsonify({"error": "Error procesando muestras"}), 400
                 
-                # Preparar datos finales
                 final_data = {
                     **processed_data,
                     'sys_ref': float(ref_data['sys_ref']),
@@ -286,7 +254,6 @@ class MedicalMonitorApp:
                     'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
                 
-                # Guardar usando data collector
                 result = self.data_collector.save_training_sample(final_data)
                 
                 if result.get('success'):
@@ -306,7 +273,6 @@ class MedicalMonitorApp:
                 
         @self.app.route("/api/ultimas_mediciones")
         def get_ultimas_mediciones():
-            """Obtener últimas mediciones de la base de datos"""
             try:
                 records = self.db_manager.get_latest_measurements(limit=20)
                 return jsonify(records)
@@ -316,22 +282,20 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/mediciones_recientes")
         def get_mediciones_recientes():
-            """Obtener últimas mediciones para el panel"""
             try:
                 limit = request.args.get('limit', 20, type=int)
                 records = self.db_manager.get_latest_measurements(limit=limit)
                 
-                # Formatear para el panel usando los nombres exactos de tu tabla
                 mediciones = []
                 for record in records:
                     mediciones.append({
                         'id': record.get('id'),
-                        'patient_id': record.get('id_paciente'),  # id_paciente
-                        'sys': float(record.get('sys', 0)),       # sys
-                        'dia': float(record.get('dia', 0)),       # dia
-                        'hr': float(record.get('hr_ml', 0)),      # hr_ml
-                        'spo2': float(record.get('spo2_ml', 0)),  # spo2_ml
-                        'nivel': record.get('nivel', '---'),      # nivel
+                        'patient_id': record.get('id_paciente'),
+                        'sys': float(record.get('sys', 0)),
+                        'dia': float(record.get('dia', 0)),
+                        'hr': float(record.get('hr_ml', 0)),
+                        'spo2': float(record.get('spo2_ml', 0)),
+                        'nivel': record.get('nivel', '---'),
                         'timestamp': str(record.get('timestamp_medicion', '')),
                         'fecha_formateada': str(record.get('timestamp_medicion', ''))[:19]
                     })
@@ -352,13 +316,11 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/test_alert", methods=['POST'])
         def test_alert():
-            """Endpoint de prueba para alertas"""
             try:
                 data = request.get_json()
                 if not data or "sys" not in data or "dia" not in data:
                     return jsonify({"error": "Datos incompletos"}), 400
                 
-                # Procesar alerta de prueba
                 test_data = {
                     "patient_id": data.get("id_paciente", 99),
                     "sys": float(data["sys"]),
@@ -368,13 +330,8 @@ class MedicalMonitorApp:
                     "nivel": self._classify_pressure_level(float(data["sys"]), float(data["dia"]))
                 }
                 
-                # Guardar en BD
                 self.db_manager.save_measurement_async(test_data)
-                
-                # Enviar alerta
                 self.alert_system.check_and_send_alert(test_data)
-                
-                # Notificar vía WebSocket
                 self.websocket_handler.emit_new_record_saved()
                 
                 return jsonify({
@@ -389,7 +346,6 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/system_status")
         def get_system_status():
-            """Obtener estado completo del sistema"""
             try:
                 status = {
                     "timestamp": datetime.now().isoformat(),
@@ -409,7 +365,6 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/ml_status")
         def get_ml_status():
-            """Obtener estado del procesador ML"""
             try:
                 return jsonify(self.ml_processor.get_status())
             except Exception as e:
@@ -418,7 +373,6 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/db_status")
         def get_db_status():
-            """Obtener estado de la base de datos"""
             try:
                 return jsonify(self.db_manager.get_system_health())
             except Exception as e:
@@ -427,26 +381,38 @@ class MedicalMonitorApp:
         
         @self.app.route("/api/alert_status")
         def get_alert_status():
-            """Obtener estado del sistema de alertas"""
             try:
                 return jsonify(self.alert_system.get_status())
             except Exception as e:
                 logger.error(f"Error obteniendo estado alertas: {e}")
                 return jsonify({"error": str(e)}), 500
         
+        @self.app.route("/api/drive_status")
+        def check_drive_status():
+            try:
+                status = self.data_collector.get_status()
+                file_info = self.data_collector.get_file_info()
+                test_connection = self.data_collector.test_drive_connection()
+                
+                return jsonify({
+                    "drive_status": status,
+                    "file_info": file_info,
+                    "connection_test": test_connection,
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+        
         logger.info("Rutas principales registradas")
     
     def _register_socketio_events(self):
-        """Registrar eventos de SocketIO sin errores"""
         
         @self.socketio.on('connect')
         def handle_connect():
-            # Mínimo procesamiento
             pass
         
         @self.socketio.on('disconnect')
         def handle_disconnect():
-            # COMPLETAMENTE VACÍO - no procesar desconexiones
             pass
         
         @self.socketio.on('request_system_status')
@@ -470,13 +436,11 @@ class MedicalMonitorApp:
         logger.info("Eventos SocketIO registrados")
     
     def _handle_legacy_esp32_data(self):
-        """Manejar datos del ESP32 en formato legacy"""
         try:
             data = request.get_json()
             if not data:
                 return jsonify({"error": "No JSON data"}), 400
             
-            # Redirigir al endpoint modular
             return self._process_esp32_data_legacy(data)
         
         except Exception as e:
@@ -487,21 +451,17 @@ class MedicalMonitorApp:
             }), 500
     
     def _process_esp32_data_legacy(self, data):
-        """Procesar datos ESP32 en modo legacy"""
         patient_id = data.get('id_paciente', 1)
         
-        # Modo prueba buzzer
         if patient_id == 999:
             response = {"sys": 185, "dia": 125, "hr": 99, "spo2": 99, "nivel": "HT Crisis"}
             self.websocket_handler.emit_update(data)
             return jsonify(response)
         
-        # Verificar modo entrenamiento
         from modules.api_nodo_datos import training_buffer
         training_status = training_buffer.get_status()
         
         if training_status['active']:
-            # Modo entrenamiento
             ir_value = float(data.get("ir", 0))
             red_value = float(data.get("red", 0))
             timestamp = data.get('timestamp', int(time.time() * 1000))
@@ -519,25 +479,20 @@ class MedicalMonitorApp:
                 "mode": "training"
             })
         
-        # Modo predicción normal
         response = {"sys": 0, "dia": 0, "hr": 0, "spo2": 0, "nivel": "Sin datos"}
         
-        # Verificar señal válida
         ir_value = float(data.get("ir", 0))
         if ir_value > 50000:
             if self.ml_processor.is_ready():
                 try:
-                    # Preparar features para ML
                     hr = float(data.get("hr_promedio", 0))
                     spo2 = float(data.get("spo2_sensor", 0))
                     ir_mean = float(data.get("ir", 0))
                     red_mean = float(data.get("red", 0))
                     
-                    # Calcular std (simplificado para legacy)
-                    ir_std = ir_mean * 0.02  # Aproximación
+                    ir_std = ir_mean * 0.02
                     red_std = red_mean * 0.02
                     
-                    # Predicción ML
                     sys_pred, dia_pred, hr_final = self.ml_processor.predict_pressure(
                         hr, spo2, ir_mean, red_mean, ir_std, red_std
                     )
@@ -550,7 +505,6 @@ class MedicalMonitorApp:
                         "nivel": self._classify_pressure_level(sys_pred, dia_pred)
                     })
                     
-                    # Guardar en BD periódicamente
                     if (time.time() - self.last_db_save_time) >= self.save_interval:
                         measurement_data = {
                             'id_paciente': patient_id,
@@ -564,7 +518,6 @@ class MedicalMonitorApp:
                         self.websocket_handler.emit_new_record_saved()
                         self.last_db_save_time = time.time()
                     
-                    # Verificar alertas
                     alert_data = {
                         'patient_id': patient_id,
                         'nivel': response["nivel"],
@@ -579,13 +532,11 @@ class MedicalMonitorApp:
                     logger.error(f"Error en predicción ML: {e}")
                     response["nivel"] = "Error ML"
         
-        # Enviar datos vía WebSocket
         self.websocket_handler.emit_update({**data, **response})
         
         return jsonify(response)
     
     def _classify_pressure_level(self, sys_pressure, dia_pressure):
-        """Clasificar nivel de presión arterial según guías médicas AHA/ESC"""
         if sys_pressure is None or dia_pressure is None:
             return "N/A"
         
@@ -594,31 +545,24 @@ class MedicalMonitorApp:
         except (ValueError, TypeError):
             return "Error"
         
-        # Crisis de Hipertensión (SYS > 180 O DIA > 120)
         if sys_val > 180 or dia_val > 120:
             return "HT Crisis"
         
-        # Hipertensión Etapa 2 (SYS >= 140 O DIA >= 90)
         if sys_val >= 140 or dia_val >= 90:
             return "HT2"
         
-        # Hipertensión Etapa 1 (SYS 130-139 O DIA 80-89)
         if (130 <= sys_val <= 139) or (80 <= dia_val <= 89):
             return "HT1"
         
-        # Elevada (SYS 120-129 Y DIA < 80)
         if 120 <= sys_val <= 129 and dia_val < 80:
             return "Elevada"
         
-        # Normal (SYS < 120 Y DIA < 80)
         if sys_val < 120 and dia_val < 80:
             return "Normal"
         
-        # Caso edge: valores que no encajan perfectamente
         return "Revisar"
     
     def run(self, host='0.0.0.0', port=None, debug=False):
-        """Ejecutar la aplicación"""
         if port is None:
             port = int(os.environ.get("PORT", 10000))
         
@@ -627,11 +571,9 @@ class MedicalMonitorApp:
                    f"BD: {self.db_manager.is_connected()}, "
                    f"Alertas: {self.alert_system.is_configured()}")
         
-        # Crear tablas de BD si no existen
         if self.db_manager.is_connected():
             self.db_manager.create_tables_if_not_exist()
         
-        # Ejecutar servidor con configuración anti-errores
         try:
             import socket
             socket.setdefaulttimeout(30)
@@ -649,11 +591,9 @@ class MedicalMonitorApp:
             self.shutdown()
     
     def shutdown(self):
-        """Apagar sistema de forma segura"""
         try:
             logger.info("Iniciando apagado del sistema...")
             
-            # Apagar módulos en orden
             self.websocket_handler.shutdown()
             self.alert_system.shutdown()
             self.db_manager.close_connections()
@@ -662,17 +602,13 @@ class MedicalMonitorApp:
         except Exception:
             pass
 
-# Crear instancia global de la aplicación
 medical_app = MedicalMonitorApp()
 app = medical_app.app
 socketio = medical_app.socketio
 
-# Función de compatibilidad para gunicorn
 def create_app():
-    """Factory function para compatibilidad con algunos servidores"""
     return medical_app.app
 
-# Clase para ocultar errores de WebSocket
 class QuietStderr:
     def write(self, s):
         if "Bad file descriptor" not in s and "socket shutdown error" not in s:
@@ -682,10 +618,7 @@ class QuietStderr:
         sys.__stderr__.flush()
 
 if __name__ == "__main__":
-    # CONFIGURACIÓN FINAL ANTI-ERRORES
     warnings.filterwarnings("ignore")
-    
-    # Configurar stderr para no mostrar errores de eventlet
     sys.stderr = QuietStderr()
     
     try:
@@ -695,6 +628,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error crítico: {e}")
         medical_app.shutdown()
-
-
-
