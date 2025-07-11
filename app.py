@@ -69,20 +69,14 @@ class MedicalMonitorApp:
         # Variables de estado
         self.system_start_time = time.time()
         self.last_db_save_time = 0
-        self.save_interval = 5  # segundos
-        
-        # Configurar conexiones entre módulos
+        self.save_interval = 5 
         self._setup_module_connections()
-        
-        # Registrar rutas y eventos
         self._register_routes()
         self._register_socketio_events()
         
         logger.info("Sistema de monitoreo médico inicializado")
     
     def _setup_module_connections(self):
-        """Configurar conexiones entre módulos"""
-        # Conectar API con otros módulos
         api_nodo_bp.ml_processor = self.ml_processor
         api_nodo_bp.db_manager = self.db_manager
         api_nodo_bp.alert_system = self.alert_system
@@ -104,11 +98,7 @@ class MedicalMonitorApp:
         def home():
             """Página principal del panel de control"""
             return render_template("index.html")
-        
-        # ==========================================
-        # RUTAS DE ENTRENAMIENTO - SISTEMA SEPARADO
-        # ==========================================
-        
+               
         @self.app.route("/api/training/start", methods=["POST"])
         def start_training_session():
             """Iniciar sesión de entrenamiento usando API module"""
@@ -218,10 +208,7 @@ class MedicalMonitorApp:
                 logger.error(f"Error obteniendo estado entrenamiento: {e}")
                 return jsonify({"active": False, "error": str(e)}), 500
         
-        # ==========================================
-        # RUTAS LEGACY - COMPATIBILIDAD
-        # ==========================================
-        
+
         @self.app.route("/api/data", methods=["POST"])
         def recibir_datos():
             """Endpoint legacy para compatibilidad con ESP32 anterior"""
@@ -316,11 +303,7 @@ class MedicalMonitorApp:
             except Exception as e:
                 logger.error(f"Error guardando datos entrenamiento: {e}")
                 return jsonify({"error": str(e)}), 500
-        
-        # ==========================================
-        # RUTAS PRINCIPALES - SISTEMA ML
-        # ==========================================
-        
+                
         @self.app.route("/api/ultimas_mediciones")
         def get_ultimas_mediciones():
             """Obtener últimas mediciones de la base de datos"""
@@ -423,10 +406,6 @@ class MedicalMonitorApp:
             except Exception as e:
                 logger.error(f"Error obteniendo estado del sistema: {e}")
                 return jsonify({"error": str(e)}), 500
-        
-        # ==========================================
-        # RUTAS ADICIONALES PARA COMPATIBILIDAD
-        # ==========================================
         
         @self.app.route("/api/ml_status")
         def get_ml_status():
@@ -716,3 +695,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error crítico: {e}")
         medical_app.shutdown()
+
+
+
