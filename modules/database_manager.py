@@ -1,5 +1,5 @@
 # modules/database_manager.py
-# Gestor especializado para operaciones de base de datos
+# Gestor especializado para operaciones de base de datos - CORREGIDO PARA RENDER
 
 import mysql.connector
 from mysql.connector import pooling
@@ -12,29 +12,17 @@ from datetime import datetime
 from contextlib import contextmanager
 
 class DatabaseManager:
-    """Gestor especializado para operaciones de base de datos con pool de conexiones"""
+    """Gestor especializado para operaciones de base de datos con pool de conexiones mejorado"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # Configuración de BD
-        self.db_config = {
-            'host': os.environ.get("MYSQLHOST"),
-            'user': os.environ.get("MYSQLUSER"),
-            'password': os.environ.get("MYSQLPASSWORD"),
-            'database': os.environ.get("MYSQLDATABASE"),
-            'port': int(os.environ.get("MYSQLPORT", 3306)),
-            'charset': 'utf8mb4',
-            'ssl_disabled': True,
-            'connect_timeout': 30,
-            'raise_on_warnings': False,
-            'autocommit': True,
-            'use_unicode': True
-        }
+        # Configuración de BD con manejo robusto para Render
+        self.db_config = self._build_db_config()
         
         # Pool de conexiones
         self.connection_pool = None
-        self.pool_size = 3
+        self.pool_size = 3  # Reducido para Render
         
         # Cola para operaciones asíncronas
         self.operation_queue = queue.Queue()
@@ -49,75 +37,189 @@ class DatabaseManager:
         # Lock para thread safety
         self.operation_lock = threading.Lock()
         
+        # Estado de conexión
+        self.last_connection_test = 0
+        self.connection_test_interval = 30  # Probar cada 30 segundos
+        
         # Inicializar conexiones
         self._initialize_pool()
         if self.is_connected():
             self._start_worker_thread()
     
-    def _initialize_pool(self):
-        """Inicializar pool de conexiones"""
-        try:
-            # Verificar configuración
-            if not all([self.db_config['host'], self.db_config['user'], 
-                       self.db_config['password'], self.db_config['database']]):
-                self.logger.warning("Configuración de BD incompleta, funcionando sin BD")
-                return
-            
-            # Probar conexión simple primero
-            test_conn = mysql.connector.connect(**self.db_config)
-            test_conn.close()
-            self.logger.info("Conexión simple BD exitosa")
-            
-            # Crear pool de conexiones
-            pool_config = {
-                **self.db_config,
-                'pool_name': 'medical_monitor_pool',
-                'pool_size': self.pool_size,
-                'pool_reset_session': True
-            }
-            
-            self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
-            self.logger.info(f"Pool de conexiones BD inicializado ({self.pool_size} conexiones)")
-            
-            # Verificar conexión
-            self._test_connection()
-            
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error inicializando pool BD: {e}")
-            self.connection_pool = None
-        except Exception as e:
-            self.logger.error(f"Error inesperado inicializando BD: {e}")
-            self.connection_pool = None
+    def _build_db_config(self):
+        """Construir configuración de BD robusta para diferentes entornos"""
+        host = os.environ.get("MYSQLHOST")
+        user = os.environ.get("MYSQLUSER") 
+        password = os.environ.get("MYSQLPASSWORD")
+        database = os.environ.get("MYSQLDATABASE")
+        port = int(os.environ.get("MYSQLPORT", 3306))
+        
+        if not all([host, user, password, database]):
+            self.logger.warning("Configuración de BD incompleta - Variables de entorno faltantes")
+            return None
+        
+        # Configuración base
+        config = {
+            'host': host,
+            'user': user,
+            'password': password,
+            'database': database,
+            'port': port,
+            'charset': 'utf8mb4',
+            'connect_timeout': 30,
+            'raise_on_warnings': False,
+            'autocommit': True,
+            'use_unicode': True
+        }
+        
+        # Configuraciones SSL específicas para diferentes proveedores
+        if 'railway' in host.lower() or 'planetscale' in host.lower():
+            # Configuración para Railway/PlanetScale
+            config.update({
+                'ssl_disabled': False,
+                'ssl_verify_cert': True,
+                'ssl_verify_identity': True
+            })
+        elif 'aiven' in host.lower() or 'digitalocean' in host.lower():
+            # Configuración para Aiven/DigitalOcean
+            config.update({
+                'ssl_disabled': False,
+                'ssl_verify_cert': False,
+                'ssl_verify_identity': False
+            })
+        else:
+            # Configuración genérica - intentar sin SSL primero
+            config.update({
+                'ssl_disabled': True
+            })
+        
+        self.logger.info(f"Configuración BD: {host}:{port}/{database} ({user})")
+        return config
     
-    def _test_connection(self):
-        """Probar conexión a la base de datos"""
+    def _initialize_pool(self):
+        """Inicializar pool de conexiones con múltiples estrategias"""
+        if not self.db_config:
+            self.logger.warning("No se puede inicializar BD sin configuración")
+            return
+        
+        # Estrategias de conexión ordenadas por probabilidad de éxito
+        strategies = [
+            # 1. SSL deshabilitado
+            {**self.db_config, 'ssl_disabled': True},
+            # 2. SSL habilitado sin verificación
+            {**self.db_config, 'ssl_disabled': False, 'ssl_verify_cert': False, 'ssl_verify_identity': False},
+            # 3. SSL habilitado con verificación
+            {**self.db_config, 'ssl_disabled': False, 'ssl_verify_cert': True, 'ssl_verify_identity': True},
+            # 4. Configuración mínima
+            {k: v for k, v in self.db_config.items() if k in ['host', 'user', 'password', 'database', 'port', 'charset']}
+        ]
+        
+        for i, config in enumerate(strategies):
+            try:
+                self.logger.info(f"Intentando conexión BD - Estrategia {i+1}")
+                
+                # Intentar conexión simple primero
+                test_conn = mysql.connector.connect(**config)
+                test_conn.close()
+                self.logger.info(f"Conexión simple exitosa - Estrategia {i+1}")
+                
+                # Crear pool de conexiones
+                pool_config = {
+                    **config,
+                    'pool_name': 'medical_monitor_pool',
+                    'pool_size': self.pool_size,
+                    'pool_reset_session': True
+                }
+                
+                self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
+                self.logger.info(f"Pool BD inicializado - Estrategia {i+1} ({self.pool_size} conexiones)")
+                
+                # Verificar pool
+                self._test_pool_connection()
+                return  # Éxito, salir del loop
+                
+            except mysql.connector.Error as e:
+                self.logger.warning(f"Estrategia {i+1} falló: {e}")
+                self.connection_pool = None
+                continue
+            except Exception as e:
+                self.logger.warning(f"Error inesperado estrategia {i+1}: {e}")
+                self.connection_pool = None
+                continue
+        
+        # Si llegamos aquí, todas las estrategias fallaron
+        self.logger.error("TODAS las estrategias de conexión BD fallaron")
+        self.logger.error("Sistema funcionará sin base de datos")
+    
+    def _test_pool_connection(self):
+        """Probar que el pool de conexiones funcione"""
         try:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
-                cursor.execute("SELECT 1")
+                cursor.execute("SELECT 1 as test")
                 result = cursor.fetchone()
-                if result[0] == 1:
-                    self.logger.info("Conexión BD verificada exitosamente")
                 cursor.close()
+                if result and result[0] == 1:
+                    self.logger.info("Pool de conexiones verificado exitosamente")
+                    return True
+                else:
+                    raise Exception("Query de prueba falló")
         except Exception as e:
-            self.logger.error(f"Error probando conexión BD: {e}")
+            self.logger.error(f"Error probando pool: {e}")
+            raise
     
     @contextmanager
     def _get_connection(self):
-        """Context manager para obtener conexión del pool"""
+        """Context manager para obtener conexión del pool con manejo robusto"""
         connection = None
         try:
-            if self.connection_pool:
-                connection = self.connection_pool.get_connection()
-                yield connection
-            else:
+            if not self.connection_pool:
                 raise Exception("Pool de conexiones no disponible")
+            
+            connection = self.connection_pool.get_connection()
+            if not connection.is_connected():
+                connection.reconnect()
+            
+            yield connection
+            
+        except mysql.connector.PoolError as e:
+            self.logger.error(f"Error del pool de conexiones: {e}")
+            # Intentar reinicializar pool
+            self._reinitialize_pool()
+            raise
         except mysql.connector.Error as e:
-            self.logger.error(f"Error obteniendo conexión BD: {e}")
+            self.logger.error(f"Error de conexión BD: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error inesperado obteniendo conexión: {e}")
             raise
         finally:
             if connection and connection.is_connected():
-                connection.close()
+                try:
+                    connection.close()
+                except:
+                    pass
+    
+    def _reinitialize_pool(self):
+        """Reinicializar pool de conexiones"""
+        try:
+            self.logger.info("Reinicializando pool de conexiones...")
+            old_pool = self.connection_pool
+            self.connection_pool = None
+            
+            # Cerrar pool anterior si existe
+            if old_pool:
+                try:
+                    # No hay método directo para cerrar pool, solo ignorar
+                    pass
+                except:
+                    pass
+            
+            # Reinicializar
+            self._initialize_pool()
+            
+        except Exception as e:
+            self.logger.error(f"Error reinicializando pool: {e}")
     
     def _start_worker_thread(self):
         """Iniciar hilo trabajador para operaciones asíncronas"""
@@ -130,11 +232,17 @@ class DatabaseManager:
         self.logger.info("Hilo trabajador BD iniciado")
     
     def _worker_loop(self):
-        """Loop principal del hilo trabajador"""
+        """Loop principal del hilo trabajador con manejo robusto"""
         while not self.should_stop:
             try:
-                # Obtener operación de la cola (timeout para poder verificar should_stop)
+                # Obtener operación de la cola
                 operation = self.operation_queue.get(timeout=1)
+                
+                # Verificar conexión periódicamente
+                current_time = time.time()
+                if current_time - self.last_connection_test > self.connection_test_interval:
+                    self._periodic_connection_test()
+                    self.last_connection_test = current_time
                 
                 # Ejecutar operación
                 if self.is_connected():
@@ -152,8 +260,22 @@ class DatabaseManager:
                 self.logger.error(f"Error en worker BD: {e}")
                 self.error_count += 1
     
+    def _periodic_connection_test(self):
+        """Prueba periódica de conexión"""
+        try:
+            if self.connection_pool:
+                with self._get_connection() as connection:
+                    cursor = connection.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                    cursor.close()
+        except Exception as e:
+            self.logger.warning(f"Prueba periódica de conexión falló: {e}")
+            # Intentar reinicializar
+            self._reinitialize_pool()
+    
     def _execute_operation(self, operation):
-        """Ejecutar una operación de BD"""
+        """Ejecutar una operación de BD con manejo de errores"""
         operation_type = operation.get('type')
         data = operation.get('data')
         
@@ -167,18 +289,32 @@ class DatabaseManager:
                     self._cleanup_old_data_sync(data)
                 else:
                     self.logger.warning(f"Tipo de operación desconocido: {operation_type}")
+                    return
                 
                 self.operation_count += 1
                 self.last_operation_time = time.time()
                 
+        except mysql.connector.Error as e:
+            self.logger.error(f"Error MySQL ejecutando {operation_type}: {e}")
+            self.error_count += 1
+            
+            # Si es error de conexión, intentar reinicializar
+            if e.errno in [2003, 2006, 2013]:  # Connection errors
+                self._reinitialize_pool()
+                
         except Exception as e:
-            self.logger.error(f"Error ejecutando operación {operation_type}: {e}")
+            self.logger.error(f"Error general ejecutando {operation_type}: {e}")
             self.error_count += 1
     
     def save_measurement_async(self, measurement_data):
-        """Guardar medición de forma asíncrona"""
+        """Guardar medición de forma asíncrona con validación"""
         if not self.is_connected():
             self.logger.warning("BD no disponible, medición no guardada")
+            return False
+        
+        # Validar datos mínimos
+        if not self._validate_measurement_data(measurement_data):
+            self.logger.error("Datos de medición inválidos")
             return False
         
         operation = {
@@ -194,38 +330,76 @@ class DatabaseManager:
             self.logger.error(f"Error añadiendo medición a cola: {e}")
             return False
     
+    def _validate_measurement_data(self, data):
+        """Validar datos de medición"""
+        required_fields = ['id_paciente', 'sys', 'dia', 'nivel']
+        
+        for field in required_fields:
+            if field not in data:
+                self.logger.error(f"Campo requerido faltante: {field}")
+                return False
+        
+        # Validar rangos
+        try:
+            sys_val = float(data['sys'])
+            dia_val = float(data['dia'])
+            
+            if not (50 <= sys_val <= 300):
+                self.logger.error(f"SYS fuera de rango: {sys_val}")
+                return False
+            
+            if not (30 <= dia_val <= 200):
+                self.logger.error(f"DIA fuera de rango: {dia_val}")
+                return False
+            
+            if dia_val >= sys_val:
+                self.logger.error(f"DIA >= SYS: {dia_val} >= {sys_val}")
+                return False
+            
+            return True
+            
+        except (ValueError, TypeError) as e:
+            self.logger.error(f"Error validando valores numéricos: {e}")
+            return False
+    
     def _save_measurement_sync(self, data):
         """Guardar medición sincrónicamente"""
         try:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
                 
+                # Query para estructura: id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml
                 query = """
                 INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr_ml, spo2_ml)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 
                 values = (
-                    data.get('id_paciente', 1),
-                    data.get('sys', 0),
-                    data.get('dia', 0),
-                    data.get('nivel', 'Sin datos'),
-                    data.get('hr_ml', 0),
-                    data.get('spo2_ml', 0)
+                    int(data.get('id_paciente', 1)),
+                    float(data.get('sys', 0)),
+                    float(data.get('dia', 0)),
+                    str(data.get('nivel', 'Sin datos')),
+                    float(data.get('hr_ml', 0)),
+                    float(data.get('spo2_ml', 0))
                 )
                 
                 cursor.execute(query, values)
                 cursor.close()
                 
-                self.logger.debug(f"Medición guardada: Paciente {data.get('id_paciente')}")
+                self.logger.debug(f"Medición guardada: Paciente {data.get('id_paciente')}, "
+                                f"SYS: {data.get('sys')}, DIA: {data.get('dia')}")
                 
         except mysql.connector.Error as e:
-            self.logger.error(f"Error guardando medición: {e}")
+            self.logger.error(f"Error MySQL guardando medición: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error general guardando medición: {e}")
             raise
     
     def get_latest_measurements(self, limit=20, patient_id=None):
-        """Obtener últimas mediciones"""
+        """Obtener últimas mediciones con manejo robusto"""
         if not self.is_connected():
+            self.logger.warning("BD no disponible para obtener mediciones")
             return []
         
         try:
@@ -234,7 +408,7 @@ class DatabaseManager:
                 
                 if patient_id:
                     query = """
-                    SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml, timestamp_medicion
+                    SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml
                     FROM mediciones 
                     WHERE id_paciente = %s
                     ORDER BY id DESC 
@@ -243,7 +417,7 @@ class DatabaseManager:
                     cursor.execute(query, (patient_id, limit))
                 else:
                     query = """
-                    SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml, timestamp_medicion
+                    SELECT id, id_paciente, sys, dia, nivel, hr_ml, spo2_ml
                     FROM mediciones 
                     ORDER BY id DESC 
                     LIMIT %s
@@ -258,7 +432,7 @@ class DatabaseManager:
                     for key, value in record.items():
                         if value is not None:
                             if key in ['sys', 'dia', 'hr_ml', 'spo2_ml']:
-                                record[key] = float(value)
+                                record[key] = float(value) if '.' in str(value) else int(value)
                             else:
                                 record[key] = str(value)
                 
@@ -266,159 +440,48 @@ class DatabaseManager:
                 return records
                 
         except mysql.connector.Error as e:
-            self.logger.error(f"Error obteniendo mediciones: {e}")
+            self.logger.error(f"Error MySQL obteniendo mediciones: {e}")
+            return []
+        except Exception as e:
+            self.logger.error(f"Error general obteniendo mediciones: {e}")
             return []
     
-    def get_patient_statistics(self, patient_id, days=7):
-        """Obtener estadísticas de un paciente"""
-        if not self.is_connected():
-            return {}
-        
+    def is_connected(self):
+        """Verificar si la BD está conectada y funcionando"""
         try:
-            with self._get_connection() as connection:
-                cursor = connection.cursor(dictionary=True)
-                
-                query = """
-                SELECT 
-                    COUNT(*) as total_mediciones,
-                    AVG(sys) as sys_promedio,
-                    AVG(dia) as dia_promedio,
-                    AVG(hr_ml) as hr_promedio,
-                    AVG(spo2_ml) as spo2_promedio,
-                    MIN(sys) as sys_min,
-                    MAX(sys) as sys_max,
-                    MIN(dia) as dia_min,
-                    MAX(dia) as dia_max,
-                    nivel
-                FROM mediciones 
-                WHERE id_paciente = %s 
-                AND timestamp_medicion >= DATE_SUB(NOW(), INTERVAL %s DAY)
-                GROUP BY nivel
-                ORDER BY total_mediciones DESC
-                """
-                
-                cursor.execute(query, (patient_id, days))
-                stats = cursor.fetchall()
-                cursor.close()
-                
-                # Convertir a formato más útil
-                result = {
-                    'patient_id': patient_id,
-                    'period_days': days,
-                    'levels_stats': stats,
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                self.logger.debug(f"Estadísticas generadas para paciente {patient_id}")
-                return result
-                
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error obteniendo estadísticas: {e}")
-            return {}
-    
-    def save_training_data_async(self, training_data):
-        """Guardar datos de entrenamiento de forma asíncrona"""
-        if not self.is_connected():
-            self.logger.warning("BD no disponible, datos entrenamiento no guardados")
-            return
-        
-        operation = {
-            'type': 'save_training_data',
-            'data': training_data
-        }
-        
-        self.operation_queue.put(operation)
-        self.logger.debug("Datos entrenamiento añadidos a cola BD")
-    
-    def _save_training_data_sync(self, data):
-        """Guardar datos de entrenamiento sincrónicamente"""
-        try:
-            with self._get_connection() as connection:
-                cursor = connection.cursor()
-                
-                query = """
-                INSERT INTO datos_entrenamiento 
-                (hr_promedio_sensor, spo2_promedio_sensor, ir_mean_filtrado, red_mean_filtrado,
-                 ir_std_filtrado, red_std_filtrado, sys_ref, dia_ref, hr_ref, timestamp_captura)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """
-                
-                values = (
-                    data.get('hr_promedio_sensor'),
-                    data.get('spo2_promedio_sensor'),
-                    data.get('ir_mean_filtrado'),
-                    data.get('red_mean_filtrado'),
-                    data.get('ir_std_filtrado'),
-                    data.get('red_std_filtrado'),
-                    data.get('sys_ref'),
-                    data.get('dia_ref'),
-                    data.get('hr_ref'),
-                    data.get('timestamp_captura')
-                )
-                
-                cursor.execute(query, values)
-                cursor.close()
-                
-                self.logger.debug("Datos entrenamiento guardados")
-                
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error guardando datos entrenamiento: {e}")
-            raise
-    
-    def cleanup_old_data_async(self, days_to_keep=30):
-        """Limpiar datos antiguos de forma asíncrona"""
-        operation = {
-            'type': 'cleanup_old_data',
-            'data': {'days_to_keep': days_to_keep}
-        }
-        
-        self.operation_queue.put(operation)
-        self.logger.info(f"Limpieza datos antiguos programada ({days_to_keep} días)")
-    
-    def _cleanup_old_data_sync(self, data):
-        """Limpiar datos antiguos sincrónicamente"""
-        try:
-            days_to_keep = data.get('days_to_keep', 30)
+            if not self.connection_pool:
+                return False
             
+            # Prueba rápida de conexión
             with self._get_connection() as connection:
-                cursor = connection.cursor()
+                if connection.is_connected():
+                    return True
+                return False
                 
-                # Limpiar mediciones antiguas
-                query = """
-                DELETE FROM mediciones 
-                WHERE timestamp_medicion < DATE_SUB(NOW(), INTERVAL %s DAY)
-                """
-                cursor.execute(query, (days_to_keep,))
-                deleted_measurements = cursor.rowcount
-                
-                # Limpiar datos de entrenamiento antiguos (mantener más tiempo)
-                query = """
-                DELETE FROM datos_entrenamiento 
-                WHERE timestamp_captura < DATE_SUB(NOW(), INTERVAL %s DAY)
-                """
-                cursor.execute(query, (days_to_keep * 3,))  # Mantener 3x más tiempo
-                deleted_training = cursor.rowcount
-                
-                cursor.close()
-                
-                self.logger.info(f"Limpieza completada: {deleted_measurements} mediciones, {deleted_training} datos entrenamiento")
-                
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error en limpieza: {e}")
-            raise
+        except Exception:
+            return False
     
     def get_system_health(self):
         """Obtener información de salud del sistema BD"""
-        if not self.is_connected():
-            return {"status": "disconnected"}
-        
         try:
+            if not self.is_connected():
+                return {
+                    "status": "disconnected",
+                    "error": "Pool no disponible",
+                    "operation_stats": {
+                        "operation_count": self.operation_count,
+                        "error_count": self.error_count,
+                        "queue_size": self.operation_queue.qsize()
+                    }
+                }
+            
             with self._get_connection() as connection:
                 cursor = connection.cursor(dictionary=True)
                 
                 # Información del pool
                 pool_info = {
-                    "pool_size": self.connection_pool.pool_size if self.connection_pool else 0
+                    "pool_size": self.pool_size,
+                    "pool_available": self.connection_pool is not None
                 }
                 
                 # Estadísticas de operaciones
@@ -426,22 +489,16 @@ class DatabaseManager:
                     "operation_count": self.operation_count,
                     "error_count": self.error_count,
                     "queue_size": self.operation_queue.qsize(),
-                    "last_operation": datetime.fromtimestamp(self.last_operation_time).isoformat() if self.last_operation_time else None
+                    "last_operation": datetime.fromtimestamp(self.last_operation_time).isoformat() if self.last_operation_time else None,
+                    "success_rate": (self.operation_count / max(self.operation_count + self.error_count, 1)) * 100
                 }
                 
                 # Información de tablas
-                cursor.execute("SELECT COUNT(*) as total FROM mediciones")
-                measurements_count = cursor.fetchone()['total']
-                
-                # Verificar si existe tabla datos_entrenamiento
-                cursor.execute("SHOW TABLES LIKE 'datos_entrenamiento'")
-                training_table_exists = cursor.fetchone() is not None
-                
-                if training_table_exists:
-                    cursor.execute("SELECT COUNT(*) as total FROM datos_entrenamiento")
-                    training_count = cursor.fetchone()['total']
-                else:
-                    training_count = 0
+                try:
+                    cursor.execute("SELECT COUNT(*) as total FROM mediciones")
+                    measurements_count = cursor.fetchone()['total']
+                except:
+                    measurements_count = 0
                 
                 cursor.close()
                 
@@ -450,98 +507,75 @@ class DatabaseManager:
                     "pool_info": pool_info,
                     "operation_stats": stats,
                     "data_counts": {
-                        "measurements": measurements_count,
-                        "training_data": training_count
+                        "measurements": measurements_count
                     },
                     "timestamp": datetime.now().isoformat()
                 }
                 
         except Exception as e:
-            self.logger.error(f"Error obteniendo salud BD: {e}")
-            return {"status": "error", "error": str(e)}
+            return {
+                "status": "error", 
+                "error": str(e),
+                "operation_stats": {
+                    "operation_count": self.operation_count,
+                    "error_count": self.error_count,
+                    "queue_size": self.operation_queue.qsize()
+                }
+            }
     
-    def is_connected(self):
-        """Verificar si la BD está conectada"""
-        return self.connection_pool is not None
-    
-    def execute_custom_query(self, query, params=None, fetch_results=True):
-        """Ejecutar query personalizado de forma segura"""
-        if not self.is_connected():
-            return None
+    def get_connection_info(self):
+        """Obtener información de conexión sin datos sensibles"""
+        if not self.db_config:
+            return {"error": "Configuración no disponible"}
         
-        try:
-            with self._get_connection() as connection:
-                cursor = connection.cursor(dictionary=True)
-                
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
-                
-                if fetch_results:
-                    results = cursor.fetchall()
-                    cursor.close()
-                    return results
-                else:
-                    affected_rows = cursor.rowcount
-                    cursor.close()
-                    return affected_rows
-                    
-        except mysql.connector.Error as e:
-            self.logger.error(f"Error ejecutando query personalizado: {e}")
-            return None
+        return {
+            'host': self.db_config.get('host', 'No configurado'),
+            'database': self.db_config.get('database', 'No configurado'),
+            'user': self.db_config.get('user', 'No configurado'),
+            'port': self.db_config.get('port', 'No configurado'),
+            'connected': self.is_connected(),
+            'pool_size': self.pool_size,
+            'ssl_disabled': self.db_config.get('ssl_disabled', 'No especificado')
+        }
     
     def create_tables_if_not_exist(self):
         """Crear tablas necesarias si no existen"""
         if not self.is_connected():
+            self.logger.warning("No se pueden crear tablas sin conexión BD")
             return False
         
         try:
             with self._get_connection() as connection:
                 cursor = connection.cursor()
                 
-                # Tabla mediciones
+                # Tabla mediciones con estructura exacta
                 mediciones_table = """
                 CREATE TABLE IF NOT EXISTS mediciones (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    id_paciente INT NOT NULL,
-                    sys DECIMAL(5,2),
-                    dia DECIMAL(5,2),
-                    nivel VARCHAR(50),
-                    hr_ml DECIMAL(5,2),
-                    spo2_ml DECIMAL(5,2),
+                    id_paciente INT NOT NULL DEFAULT 1,
+                    sys DECIMAL(5,2) NOT NULL DEFAULT 0,
+                    dia DECIMAL(5,2) NOT NULL DEFAULT 0,
+                    nivel VARCHAR(50) NOT NULL DEFAULT 'Normal',
+                    hr_ml DECIMAL(5,2) DEFAULT 0,
+                    spo2_ml DECIMAL(5,2) DEFAULT 0,
                     timestamp_medicion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_paciente (id_paciente),
+                    INDEX idx_nivel (nivel),
                     INDEX idx_timestamp (timestamp_medicion)
-                )
-                """
-                
-                # Tabla datos_entrenamiento
-                entrenamiento_table = """
-                CREATE TABLE IF NOT EXISTS datos_entrenamiento (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    hr_promedio_sensor DECIMAL(8,2),
-                    spo2_promedio_sensor DECIMAL(5,2),
-                    ir_mean_filtrado DECIMAL(10,2),
-                    red_mean_filtrado DECIMAL(10,2),
-                    ir_std_filtrado DECIMAL(10,2),
-                    red_std_filtrado DECIMAL(10,2),
-                    sys_ref DECIMAL(5,2),
-                    dia_ref DECIMAL(5,2),
-                    hr_ref DECIMAL(5,2),
-                    timestamp_captura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
                 
                 cursor.execute(mediciones_table)
-                cursor.execute(entrenamiento_table)
                 cursor.close()
                 
                 self.logger.info("Tablas verificadas/creadas exitosamente")
                 return True
                 
         except mysql.connector.Error as e:
-            self.logger.error(f"Error creando tablas: {e}")
+            self.logger.error(f"Error MySQL creando tablas: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error general creando tablas: {e}")
             return False
     
     def close_connections(self):
@@ -553,13 +587,34 @@ class DatabaseManager:
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
         
-        # Cerrar pool
+        # Procesar operaciones pendientes críticas
+        pending_operations = 0
+        while not self.operation_queue.empty() and pending_operations < 10:
+            try:
+                operation = self.operation_queue.get_nowait()
+                if operation.get('type') == 'save_measurement':
+                    try:
+                        self._execute_operation(operation)
+                        pending_operations += 1
+                    except:
+                        pass
+            except queue.Empty:
+                break
+            except:
+                break
+        
+        # Limpiar pool
         if self.connection_pool:
             self.connection_pool = None
         
-        self.logger.info("Conexiones BD cerradas")
+        self.logger.info(f"Conexiones BD cerradas ({pending_operations} operaciones pendientes procesadas)")
     
     def __del__(self):
         """Limpieza al destruir el objeto"""
         if hasattr(self, 'should_stop'):
             self.should_stop = True
+        if hasattr(self, 'connection_pool') and self.connection_pool:
+            try:
+                self.close_connections()
+            except:
+                pass
