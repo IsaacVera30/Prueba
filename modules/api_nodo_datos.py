@@ -14,7 +14,6 @@ api_nodo_bp = Blueprint('api_nodo', __name__)
 logger = logging.getLogger(__name__)
 
 class MLSampleBuffer:
-    """Buffer exclusivo para predicción ML - 50 muestras"""
     
     def __init__(self):
         self.patient_buffers = {}
@@ -22,7 +21,6 @@ class MLSampleBuffer:
         self.max_inactive_time = 300
     
     def add_sample(self, patient_id, ir, red, timestamp):
-        """Añadir muestra al buffer ML"""
         if patient_id not in self.patient_buffers:
             self.patient_buffers[patient_id] = []
         
@@ -35,22 +33,18 @@ class MLSampleBuffer:
         
         self.patient_buffers[patient_id].append(sample)
         
-        # Mantener solo las últimas 50 muestras
         if len(self.patient_buffers[patient_id]) > self.target_samples:
             self.patient_buffers[patient_id] = self.patient_buffers[patient_id][-self.target_samples:]
         
         return len(self.patient_buffers[patient_id])
     
     def get_sample_count(self, patient_id):
-        """Obtener número de muestras ML del paciente"""
         return len(self.patient_buffers.get(patient_id, []))
     
     def has_enough_samples(self, patient_id):
-        """Verificar si tiene 50 muestras para predicción"""
         return self.get_sample_count(patient_id) >= self.target_samples
     
     def get_samples_for_ml(self, patient_id):
-        """Obtener datos procesados para ML"""
         if not self.has_enough_samples(patient_id):
             return None
         
@@ -119,7 +113,6 @@ class MLSampleBuffer:
             return 75.0
     
     def _estimate_hr_from_variability(self, ir_values):
-        """Método alternativo para estimar HR"""
         try:
             diff = np.diff(ir_values)
             variability = np.std(diff)
@@ -136,7 +129,6 @@ class MLSampleBuffer:
             return 75.0
     
     def _calculate_spo2(self, ir_values, red_values):
-        """Calcular SpO2 usando ratio R/IR estándar"""
         try:
             ir_array = np.array(ir_values, dtype=float)
             red_array = np.array(red_values, dtype=float)
@@ -153,10 +145,7 @@ class MLSampleBuffer:
             if ir_dc <= 0 or red_dc <= 0 or ir_ac <= 0:
                 return 98.0
             
-            # Calcular ratio R
             r = (red_ac / red_dc) / (ir_ac / ir_dc)
-            
-            # Ecuación de calibración
             spo2 = 104 - 17 * r
 
             if 85 <= spo2 <= 100:
@@ -169,15 +158,12 @@ class MLSampleBuffer:
             return 98.0
     
     def clear_patient_buffer(self, patient_id):
-        """Limpiar buffer ML del paciente"""
         if patient_id in self.patient_buffers:
             del self.patient_buffers[patient_id]
             logger.info(f"Buffer ML limpiado para paciente {patient_id}")
 
 
-class TrainingSampleBuffer:
-    """Buffer exclusivo para entrenamiento - Independiente del ML"""
-    
+class TrainingSampleBuffer:    
     def __init__(self):
         self.patient_samples = {}
         self.is_active = False
@@ -185,7 +171,6 @@ class TrainingSampleBuffer:
         self.sample_count = 0
     
     def start_collection(self, patient_id=1):
-        """Iniciar recolección de entrenamiento"""
         self.is_active = True
         self.current_patient = patient_id
         self.patient_samples[patient_id] = []
@@ -193,7 +178,6 @@ class TrainingSampleBuffer:
         logger.info(f"Entrenamiento iniciado para paciente {patient_id}")
     
     def add_training_sample(self, patient_id, ir, red, timestamp):
-        """Añadir muestra SOLO para entrenamiento"""
         if not self.is_active or patient_id != self.current_patient:
             return 0
         
@@ -211,7 +195,6 @@ class TrainingSampleBuffer:
         return self.sample_count
     
     def stop_collection(self):
-        """Detener recolección y preparar para guardar"""
         if not self.is_active:
             return 0
         
@@ -293,12 +276,10 @@ class TrainingSampleBuffer:
             return 98.0
 
 
-# Crear instancias separadas
 ml_sample_buffer = MLSampleBuffer()
 training_buffer = TrainingSampleBuffer()
 
 def classify_pressure_level(sys_pressure, dia_pressure):
-    """Clasificar nivel de presión arterial según guías médicas"""
     try:
         sys_val, dia_val = float(sys_pressure), float(dia_pressure)
     except (ValueError, TypeError):
@@ -323,9 +304,6 @@ def classify_pressure_level(sys_pressure, dia_pressure):
 
 @api_nodo_bp.route('/raw_data', methods=['POST'])
 def receive_raw_data():
-    """
-    Endpoint principal para recibir datos del ESP32 - CORREGIDO PARA BD
-    """
     try:
         data = request.get_json()
         if not data:
@@ -339,7 +317,7 @@ def receive_raw_data():
 
         logger.info(f"Datos ESP32 - Paciente:{patient_id} IR:{ir_value} RED:{red_value}")
 
-        # CASO ESPECIAL: ID 999 para prueba de buzzer
+        # Implementación del endpoint para el ID 999 para la prueba de buzzer
         if patient_id == 999:
             logger.info("Modo prueba buzzer activado")
             response = {
@@ -351,11 +329,9 @@ def receive_raw_data():
                 api_nodo_bp.websocket_handler.emit_update(data)
             return jsonify(response)
 
-        # VERIFICAR SI ESTAMOS EN MODO ENTRENAMIENTO
         training_status = training_buffer.get_status()
         
         if training_status['active'] and training_status['current_patient'] == patient_id:
-            # MODO ENTRENAMIENTO - Buffer separado
             training_count = training_buffer.add_training_sample(patient_id, ir_value, red_value, timestamp)
             
             logger.info(f"ENTRENAMIENTO: Muestra {training_count} añadida para paciente {patient_id}")
@@ -368,7 +344,6 @@ def receive_raw_data():
                 "message": "Recolectando datos para entrenamiento"
             }
             
-            # Notificar vía WebSocket
             if hasattr(api_nodo_bp, 'websocket_handler'):
                 training_update = {
                     "training_active": True,
