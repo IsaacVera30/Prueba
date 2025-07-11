@@ -26,25 +26,25 @@ class MLProcessor:
         self.last_prediction_time = 0
         self.prediction_count = 0
         
-        # Cache de predicciones recientes
+        
         self.prediction_cache = {}
         self.cache_timeout = 5  # segundos
         
-        # Métricas de rendimiento
+        
         self.prediction_times = []
         self.error_count = 0
         
-        # Lock para thread safety
+        
         self.prediction_lock = threading.Lock()
         
-        # Calibración 
+       
         self.calibration_enabled = True
         self.calibration_factors = {
-            'sys_global': 0.87,  # CAMBIO: Reducido de 1.25 a 1.10
-            'dia_global': 0.89,  # Mantener para reducir DIA
+            'sys_global': 0.87,  
+            'dia_global': 0.89, 
         }
         
-        # Inicializar modelos
+       
         self._load_models()
         
     def _load_models(self):
