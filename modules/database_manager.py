@@ -25,13 +25,16 @@ class DatabaseManager:
             'database': os.environ.get("MYSQLDATABASE"),
             'port': int(os.environ.get("MYSQLPORT", 3306)),
             'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci',
-            'autocommit': True
+            'ssl_disabled': True,
+            'connect_timeout': 30,
+            'raise_on_warnings': False,
+            'autocommit': True,
+            'use_unicode': True
         }
         
         # Pool de conexiones
         self.connection_pool = None
-        self.pool_size = 5
+        self.pool_size = 3
         
         # Cola para operaciones asíncronas
         self.operation_queue = queue.Queue()
@@ -48,7 +51,8 @@ class DatabaseManager:
         
         # Inicializar conexiones
         self._initialize_pool()
-        self._start_worker_thread()
+        if self.is_connected():
+            self._start_worker_thread()
     
     def _initialize_pool(self):
         """Inicializar pool de conexiones"""
@@ -59,15 +63,17 @@ class DatabaseManager:
                 self.logger.warning("Configuración de BD incompleta, funcionando sin BD")
                 return
             
+            # Probar conexión simple primero
+            test_conn = mysql.connector.connect(**self.db_config)
+            test_conn.close()
+            self.logger.info("Conexión simple BD exitosa")
+            
             # Crear pool de conexiones
             pool_config = {
                 **self.db_config,
                 'pool_name': 'medical_monitor_pool',
                 'pool_size': self.pool_size,
-                'pool_reset_session': True,
-                'pool_pre_ping': True,
-                'connect_timeout': 10,
-                'autocommit': True
+                'pool_reset_session': True
             }
             
             self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
@@ -115,6 +121,10 @@ class DatabaseManager:
     
     def _start_worker_thread(self):
         """Iniciar hilo trabajador para operaciones asíncronas"""
+        if not self.is_connected():
+            self.logger.warning("No se puede iniciar worker sin conexión BD")
+            return
+        
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
         self.logger.info("Hilo trabajador BD iniciado")
@@ -127,7 +137,11 @@ class DatabaseManager:
                 operation = self.operation_queue.get(timeout=1)
                 
                 # Ejecutar operación
-                self._execute_operation(operation)
+                if self.is_connected():
+                    self._execute_operation(operation)
+                else:
+                    self.logger.warning("Operación BD descartada - Sin conexión")
+                    self.error_count += 1
                 
                 # Marcar tarea como completada
                 self.operation_queue.task_done()
@@ -165,15 +179,20 @@ class DatabaseManager:
         """Guardar medición de forma asíncrona"""
         if not self.is_connected():
             self.logger.warning("BD no disponible, medición no guardada")
-            return
+            return False
         
         operation = {
             'type': 'save_measurement',
             'data': measurement_data
         }
         
-        self.operation_queue.put(operation)
-        self.logger.debug(f"Medición añadida a cola BD (queue size: {self.operation_queue.qsize()})")
+        try:
+            self.operation_queue.put(operation)
+            self.logger.debug(f"Medición añadida a cola BD (queue size: {self.operation_queue.qsize()})")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error añadiendo medición a cola: {e}")
+            return False
     
     def _save_measurement_sync(self, data):
         """Guardar medición sincrónicamente"""
@@ -182,18 +201,17 @@ class DatabaseManager:
                 cursor = connection.cursor()
                 
                 query = """
-                INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr_ml, spo2_ml, timestamp_medicion)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO mediciones (id_paciente, sys, dia, nivel, hr_ml, spo2_ml)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 
                 values = (
-                    data.get('id_paciente'),
-                    data.get('sys_ml'),
-                    data.get('dia_ml'),
-                    data.get('estado'),
-                    data.get('hr_ml'),
-                    data.get('spo2_ml'),
-                    datetime.now()
+                    data.get('id_paciente', 1),
+                    data.get('sys', 0),
+                    data.get('dia', 0),
+                    data.get('nivel', 'Sin datos'),
+                    data.get('hr_ml', 0),
+                    data.get('spo2_ml', 0)
                 )
                 
                 cursor.execute(query, values)
@@ -235,11 +253,14 @@ class DatabaseManager:
                 records = cursor.fetchall()
                 cursor.close()
                 
-                # Convertir a string para JSON
+                # Convertir tipos para JSON
                 for record in records:
                     for key, value in record.items():
                         if value is not None:
-                            record[key] = str(value)
+                            if key in ['sys', 'dia', 'hr_ml', 'spo2_ml']:
+                                record[key] = float(value)
+                            else:
+                                record[key] = str(value)
                 
                 self.logger.debug(f"Obtenidas {len(records)} mediciones")
                 return records
@@ -397,8 +418,7 @@ class DatabaseManager:
                 
                 # Información del pool
                 pool_info = {
-                    "pool_size": self.connection_pool.pool_size if self.connection_pool else 0,
-                    "connections_in_use": self.pool_size - len(self.connection_pool._cnx_queue._queue) if self.connection_pool else 0
+                    "pool_size": self.connection_pool.pool_size if self.connection_pool else 0
                 }
                 
                 # Estadísticas de operaciones
@@ -533,31 +553,13 @@ class DatabaseManager:
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
         
-        # Esperar a que se vacíe la cola
-        if not self.operation_queue.empty():
-            self.logger.info("Esperando operaciones pendientes...")
-            self.operation_queue.join()
-        
         # Cerrar pool
         if self.connection_pool:
-            try:
-                # Cerrar todas las conexiones del pool
-                while True:
-                    try:
-                        conn = self.connection_pool.get_connection()
-                        conn.close()
-                    except:
-                        break
-                self.logger.info("Conexiones BD cerradas")
-            except Exception as e:
-                self.logger.error(f"Error cerrando conexiones: {e}")
+            self.connection_pool = None
+        
+        self.logger.info("Conexiones BD cerradas")
     
     def __del__(self):
         """Limpieza al destruir el objeto"""
         if hasattr(self, 'should_stop'):
             self.should_stop = True
-        if hasattr(self, 'connection_pool') and self.connection_pool:
-            try:
-                self.close_connections()
-            except:
-                pass
