@@ -1,16 +1,10 @@
-# modules/api_nodo_datos.py
-# API especializada para recibir datos del ESP32 - CORREGIDA PARA BD
-
 from flask import Blueprint, request, jsonify
 import time
 import numpy as np
 from datetime import datetime
 import logging
 
-# Crear blueprint para la API de nodos
 api_nodo_bp = Blueprint('api_nodo', __name__)
-
-# Logger específico para este módulo
 logger = logging.getLogger(__name__)
 
 class MLSampleBuffer:
@@ -68,21 +62,18 @@ class MLSampleBuffer:
             return None
     
     def _calculate_heart_rate(self, ir_values):
-        """Calcular frecuencia cardíaca usando análisis de picos en señal IR"""
         try:
             ir_array = np.array(ir_values, dtype=float)
             
             if len(ir_array) < 10:
                 return 75.0
             
-            # Suavizar la señal
             window_size = min(5, len(ir_array) // 10)
             if window_size >= 3:
                 smoothed = np.convolve(ir_array, np.ones(window_size)/window_size, mode='valid')
             else:
                 smoothed = ir_array
             
-            # Encontrar picos
             peaks = []
             if len(smoothed) > 2:
                 threshold = np.mean(smoothed) + 0.5 * np.std(smoothed)
@@ -93,7 +84,6 @@ class MLSampleBuffer:
                         smoothed[i] > threshold):
                         peaks.append(i)
             
-            # Calcular HR desde picos
             if len(peaks) >= 2:
                 intervals = np.diff(peaks)
                 if len(intervals) > 0:
@@ -136,7 +126,6 @@ class MLSampleBuffer:
             if len(ir_array) < 10 or len(red_array) < 10:
                 return 98.0
             
-            # Calcular componentes AC y DC
             ir_ac = np.std(ir_array)
             ir_dc = np.mean(ir_array)
             red_ac = np.std(red_array)
@@ -204,7 +193,6 @@ class TrainingSampleBuffer:
         return samples_collected
     
     def get_samples_for_saving(self, patient_id):
-        """Obtener muestras procesadas para guardar"""
         if patient_id not in self.patient_samples or not self.patient_samples[patient_id]:
             return None
         
@@ -229,7 +217,6 @@ class TrainingSampleBuffer:
             return None
     
     def clear_current_session(self):
-        """Limpiar sesión actual después de guardar"""
         if self.current_patient and self.current_patient in self.patient_samples:
             del self.patient_samples[self.current_patient]
         
@@ -239,7 +226,6 @@ class TrainingSampleBuffer:
         logger.info("Sesión de entrenamiento limpiada")
     
     def get_status(self):
-        """Estado del buffer de entrenamiento"""
         return {
             'active': self.is_active,
             'current_patient': self.current_patient,
@@ -248,7 +234,6 @@ class TrainingSampleBuffer:
         }
     
     def _calculate_average_hr(self, ir_values):
-        """Calcular HR promedio para entrenamiento"""
         if len(ir_values) < 10:
             return 75.0
         
@@ -261,7 +246,6 @@ class TrainingSampleBuffer:
             return 68.0
     
     def _calculate_average_spo2(self, ir_values, red_values):
-        """Calcular SpO2 promedio para entrenamiento"""
         try:
             ir_mean = np.mean(ir_values)
             red_mean = np.mean(red_values)
@@ -317,7 +301,6 @@ def receive_raw_data():
 
         logger.info(f"Datos ESP32 - Paciente:{patient_id} IR:{ir_value} RED:{red_value}")
 
-        # Implementación del endpoint para el ID 999 para la prueba de buzzer
         if patient_id == 999:
             logger.info("Modo prueba buzzer activado")
             response = {
@@ -355,7 +338,6 @@ def receive_raw_data():
             return jsonify(response)
         
         else:
-            # MODO PREDICCIÓN ML - Buffer separado
             ml_count = ml_sample_buffer.add_sample(patient_id, ir_value, red_value, timestamp)
             
             logger.info(f"ML: Muestra {ml_count}/50 añadida para paciente {patient_id}")
@@ -371,7 +353,6 @@ def receive_raw_data():
                 "calidad": "collecting"
             }
 
-            # PREDICCIÓN ML cuando llegue a 50 muestras
             if ml_count == 50:
                 logger.info(f"50 muestras ML alcanzadas para paciente {patient_id}")
                 
@@ -379,7 +360,6 @@ def receive_raw_data():
                 
                 if ml_data and hasattr(api_nodo_bp, 'ml_processor') and api_nodo_bp.ml_processor.is_ready():
                     try:
-                        # Realizar predicción ML
                         result = api_nodo_bp.ml_processor.predict_pressure(
                             ml_data['hr_calculated'], 
                             ml_data['spo2_calculated'], 
@@ -406,7 +386,6 @@ def receive_raw_data():
                                 
                                 logger.info(f"Predicción ML exitosa - SYS:{sys_pred} DIA:{dia_pred}")
                                 
-                                # GUARDAR EN BD CON MANEJO ROBUSTO
                                 if hasattr(api_nodo_bp, 'db_manager') and api_nodo_bp.db_manager.is_connected():
                                     try:
                                         measurement_data = {
@@ -418,7 +397,6 @@ def receive_raw_data():
                                             'nivel': str(response["nivel"])
                                         }
                                         
-                                        # Intentar guardar de forma asíncrona
                                         save_success = api_nodo_bp.db_manager.save_measurement_async(measurement_data)
                                         if save_success:
                                             logger.info(f"Medición guardada en BD exitosamente")
@@ -427,11 +405,9 @@ def receive_raw_data():
                                             
                                     except Exception as db_error:
                                         logger.error(f"Error específico guardando en BD: {db_error}")
-                                        # No fallar el endpoint por error de BD
                                 else:
                                     logger.warning("BD no disponible - medición no guardada")
                                 
-                                # Verificar alertas
                                 if hasattr(api_nodo_bp, 'alert_system'):
                                     try:
                                         alert_data = {
@@ -446,7 +422,6 @@ def receive_raw_data():
                                     except Exception as alert_error:
                                         logger.error(f"Error procesando alerta: {alert_error}")
                                 
-                                # Notificar vía WebSocket
                                 if hasattr(api_nodo_bp, 'websocket_handler'):
                                     try:
                                         api_nodo_bp.websocket_handler.emit_new_record_saved()
@@ -457,7 +432,6 @@ def receive_raw_data():
                                 response["nivel"] = "Error predicción"
                                 response["calidad"] = "error"
                         
-                        # Limpiar buffer ML después de predicción
                         ml_sample_buffer.clear_patient_buffer(patient_id)
                         logger.info(f"Buffer ML limpiado para paciente {patient_id}")
                         
@@ -471,7 +445,6 @@ def receive_raw_data():
                     response["nivel"] = "ML no disponible"
                     response["calidad"] = "error"
             
-            # Notificar vía WebSocket
             if hasattr(api_nodo_bp, 'websocket_handler'):
                 try:
                     update_data = {**data, **response}
@@ -490,11 +463,8 @@ def receive_raw_data():
             "calidad": "error"
         }), 500
 
-# Resto de endpoints permanecen igual...
-
 @api_nodo_bp.route('/training/start', methods=['POST'])
 def start_training_collection():
-    """Iniciar recolección de entrenamiento"""
     try:
         data = request.get_json() or {}
         patient_id = data.get('patient_id', 1)
@@ -513,7 +483,6 @@ def start_training_collection():
 
 @api_nodo_bp.route('/training/stop', methods=['POST'])
 def stop_training_collection():
-    """Detener recolección de entrenamiento"""
     try:
         samples_collected = training_buffer.stop_collection()
         
@@ -529,7 +498,6 @@ def stop_training_collection():
 
 @api_nodo_bp.route('/training/save', methods=['POST'])
 def save_training_data():
-    """Guardar datos de entrenamiento con referencias"""
     try:
         ref_data = request.get_json()
         if not ref_data:
@@ -542,12 +510,10 @@ def save_training_data():
         if status['sample_count'] == 0:
             return jsonify({"success": False, "error": "No hay muestras para guardar"}), 400
         
-        # Obtener muestras procesadas
         processed_data = training_buffer.get_samples_for_saving(status['current_patient'])
         if not processed_data:
             return jsonify({"success": False, "error": "Error procesando muestras"}), 400
         
-        # Preparar datos finales
         final_data = {
             **processed_data,
             'sys_ref': float(ref_data['sys_ref']),
@@ -556,12 +522,10 @@ def save_training_data():
             'timestamp_captura': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
-        # Guardar usando data collector
         if hasattr(api_nodo_bp, 'data_collector'):
             result = api_nodo_bp.data_collector.save_training_sample(final_data)
             
             if result.get('success'):
-                # Limpiar sesión después de guardar exitosamente
                 training_buffer.clear_current_session()
                 
                 return jsonify({
@@ -579,9 +543,7 @@ def save_training_data():
         return jsonify({"success": False, "error": str(e)}), 500
 
 def init_api_module(app):
-    """Inicializar el módulo API con la aplicación Flask"""
     logger.info("Inicializando módulo API con buffers separados")
     logger.info("Módulo API inicializado - ML Buffer y Training Buffer creados")
 
-# Inicializar automáticamente cuando se importe
 init_api_module(None)
